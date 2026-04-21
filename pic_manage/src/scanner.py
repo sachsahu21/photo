@@ -53,6 +53,7 @@ class ImageScanner:
             List of image records
         """
         folder = Path(folder_path).expanduser().resolve()
+        # print(folder)
 
         if not folder.exists():
             logger.error(f"Folder not found: {folder}")
@@ -61,6 +62,7 @@ class ImageScanner:
         logger.info(f"Scanning: {folder}")
 
         # Find all image files
+        print(folder)
         all_files = self._find_images(folder)
         logger.info(f"Found {len(all_files)} images")
 
@@ -86,7 +88,8 @@ class ImageScanner:
 
     def _find_images(self, folder: Path) -> List[Path]:
         """Find all image files in folder"""
-        extensions = self.config.get('scan.extensions', [])
+        # extensions = self.config.get('scan.extensions', [])        
+        extensions = self.config.get('scan',{}).get('extensions')  
         extensions = {f'.{ext.lower()}' for ext in extensions}
 
         all_files = []
@@ -96,6 +99,54 @@ class ImageScanner:
                     all_files.append(Path(dirpath) / fn)
 
         return sorted(all_files)
+
+    # def _find_images(self, folder: Path) -> List[Path]:
+    #     """Find all image files in folder - DEBUG VERSION"""
+    #     print("CONFIG:", self.config)
+    #     print("KEY EXISTS:", 'scan.extensions' in self.config)
+    #     print("RAW VALUE:", self.config.get('scan',{}).get('extensions') )
+
+    #     extensions = self.config.get('scan',{}).get('extensions')  
+    #     extensions = {f'.{ext.lower()}' for ext in extensions} 
+
+    #     print("\n" + "="*60)
+    #     print("DEBUG: _find_images")
+    #     print("="*60)
+    #     print(f"Folder: {folder}")
+    #     print(f"Folder exists: {folder.exists()}")
+    #     print(f"Is directory: {folder.is_dir()}")
+    #     print(f"Extensions to find: {extensions}")
+    #     print("="*60)
+
+    #     all_files = []
+    #     total_files_checked = 0
+
+    #     for dirpath, dirnames, filenames in os.walk(folder):
+    #         print(f"\nScanning: {dirpath}")
+    #         print(f"  Subdirs: {len(dirnames)}")
+    #         print(f"  Files: {len(filenames)}")
+
+    #         total_files_checked += len(filenames)
+
+    #         for fn in filenames:
+    #             file_ext = Path(fn).suffix.lower()
+
+    #             if file_ext in extensions:
+    #                 full_path = Path(dirpath) / fn
+    #                 all_files.append(full_path)
+    #                 print(f"  ✓ MATCH: {fn} ({file_ext})")
+    #             # else:
+    #             #     if file_ext:  # Only show if has extension
+    #             #         print(f"  ✗ SKIP: {fn} ({file_ext})")
+
+    #     print("\n" + "="*60)
+    #     print(f"SUMMARY:")
+    #     print(f"  Total files checked: {total_files_checked}")
+    #     print(f"  Image files found: {len(all_files)}")
+    #     print(f"  Recursive: {self.config.get('scan.recursive', True)}")
+    #     print("="*60 + "\n")
+
+    #     return sorted(all_files)
 
     def _extract_metadata(self, filepath: Path) -> Dict:
         """Extract metadata from single image"""

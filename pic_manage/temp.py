@@ -80,8 +80,7 @@ config.local.yaml
 .coverage
 htmlcov/
 2. requirements.txt
-txt
-Copy code
+ 
 Pillow>=9.0.0
 openpyxl>=3.8.0
 opencv-python>=4.5.0

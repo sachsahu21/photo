@@ -1,3 +1,5 @@
+C:\Users\ISSUser\Desktop\Sachin\git\photo\pic_manage\output\image_scan_Goa_20260417_225240.xlsx
+
 # Image Scanner - Professional Edition
 
 Professional image metadata scanner with blur detection, duplicate handling, and automated organization.
@@ -27,16 +29,14 @@ Professional image metadata scanner with blur detection, duplicate handling, and
    ```bash
    git clone https://github.com/yourusername/image-scanner.git
    cd image-scanner
-Create virtual environment
-bash
-Copy code
+
+<!-- Create virtual environment -->
+<!-- run the below command 1st time  if the folders already exisit then run the nxt command -->
 python -m venv venv
 
 # On Windows
 venv\Scripts\activate
-
-# On macOS/Linux
-source venv/bin/activate
+ 
 
 <!-- Install dependencies -->
 

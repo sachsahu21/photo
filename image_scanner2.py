@@ -14,11 +14,11 @@ from collections import defaultdict, Counter
 # ──────────────────────────────────────────────
 #  ✏️  EDIT THIS — your folder path
 # ──────────────────────────────────────────────
-SCAN_FOLDER = r"C:\Users\ISSUser\Desktop\Sachin\hdd\Sachin\Moht shoot 2025"   # Windows example
+SCAN_FOLDER = r"C:\Users\issuser\Desktop\Sachin\hdd"   # Windows example
 # SCAN_FOLDER = "/Users/yourname/Photos"       # Mac/Linux example
 
 #  Output file (saved in the same folder as this script)
-OUTPUT_FILE = "image_scan_results.xlsx"
+OUTPUT_FILE = "meta"
 # ──────────────────────────────────────────────
 
 
@@ -186,7 +186,7 @@ def scan(folder):
             'folder':        str(fp.parent),
             'full_path':     str(fp),
             'extension':     fp.suffix.lower().lstrip('.').upper(),
-            'size_kb':       round(stat.st_size / 1024, 1),
+            'size_mb':       round(stat.st_size / (1024 * 1024), 2),
             'file_modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
             'md5_hash':      md5,
             **meta
@@ -217,7 +217,7 @@ COLUMNS = [
     ('filename',        'Filename',        28),
     ('folder',          'Folder',          45),
     ('extension',       'Format',          10),
-    ('size_kb',         'Size (KB)',        11),
+    ('size_mb',         'Size (MB)',        11),
     ('width',           'Width (px)',       11),
     ('height',          'Height (px)',      11),
     ('mode',            'Color Mode',      12),
@@ -252,6 +252,11 @@ def _hdr(color='2E4057'):
     }
 
 def write_excel(records, out_path):
+    
+    parent = Path(SCAN_FOLDER).name
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = Path(out_path) / f"image_scan_{parent}_{ts}.xlsx"
+    
     wb = openpyxl.Workbook()
 
     # ── Sheet 1: All Images ──────────────────────
@@ -276,12 +281,18 @@ def write_excel(records, out_path):
             val = rec.get(key, '')
             if isinstance(val, datetime): val = val.strftime('%Y-%m-%d %H:%M:%S')
             if isinstance(val, bool):     val = 'Yes' if val else 'No'
+            if isinstance(val, str):
+                val = ''.join(ch for ch in val if ord(ch) >= 32)
+
             # c = ws.cell(row=ri, column=ci, value=val)
             try:
                 c = ws.cell(row=ri, column=ci, value=val)
             except Exception as e:
                 print(f"\nERROR at row {ri}, column {key}: {repr(val)}")
-                raise
+                val = str(val)
+                val = ''.join(ch for ch in val if ord(ch) >= 32)
+                c = ws.cell(row=ri, column=ci, value=val)
+
             c.border = _border()
             c.alignment = Alignment(vertical='center')
             if fill: c.fill = fill
@@ -298,7 +309,7 @@ def write_excel(records, out_path):
         ('filename',        'Filename', 28),
         ('folder',          'Folder',   45),
         ('extension',       'Format',   10),
-        ('size_kb',         'Size (KB)',11),
+        ('size_mb',         'Size (MB)',11),
         ('md5_hash',        'MD5 Hash', 34),
         ('full_path',       'Full Path',55),
     ]
@@ -354,7 +365,7 @@ def write_excel(records, out_path):
         ('GENERAL', ''),
         ('Total Images Found',    total),
         ('Total Folders Scanned', len(set(r['folder'] for r in records))),
-        ('Total Size (MB)',        round(sum(r.get('size_kb', 0) for r in records) / 1024, 1)),
+        ('Total Size (MB)',        round(sum(r.get('size_mb', 0) for r in records) , 1)),
         ('', ''),
         ('DUPLICATES', ''),
         ('Duplicate Files',  dup_count),
@@ -400,7 +411,7 @@ if __name__ == '__main__':
         print("No images found. Check your SCAN_FOLDER path.")
         exit(0)
 
-    out = Path(__file__).parent / OUTPUT_FILE
+    out = Path(__file__).parent/OUTPUT_FILE
     write_excel(records, str(out))
 
     dup_count = sum(1 for r in records if r['is_duplicate'] == 'YES')
@@ -413,6 +424,6 @@ if __name__ == '__main__':
   Total images    : {len(records)}
   Duplicate files : {dup_count}
   Duplicate groups: {dup_grps}
-  Output file     : {OUTPUT_FILE}
+  Output file     : {out}
 +--------------------------------------+
 """)

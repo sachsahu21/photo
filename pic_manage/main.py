@@ -95,6 +95,7 @@ def task_1_scan(config: ConfigManager, logger) -> Optional[str]:
         scanner = ImageScanner(config.to_dict())
         scan_folder = config.get('scan.folder_path')
         records = scanner.scan(scan_folder)
+        # print(config.to_dict())
 
         if not records:
             print("⚠ No images found")
@@ -190,6 +191,80 @@ def task_1b_resume_excel(config: ConfigManager, logger) -> Optional[str]:
         return None
 
 
+# def task_2_delete(excel_path: str, logger):
+#     """Task 2: Delete marked files"""
+#     print("\n" + "="*60)
+#     print("TASK 2: DELETE MARKED FILES")
+#     print("="*60)
+
+#     try:
+#         import openpyxl
+
+#         wb = openpyxl.load_workbook(excel_path)
+#         ws = wb['All Images']
+
+#         # Find columns
+#         delete_col = None
+#         filename_col = None
+#         fullpath_col = None
+
+#         # for ci, cell in enumerate(ws[1], 1):
+#         #     if cell.value == 'DELETE? (Yes/No)':
+#         #         delete_col = ci
+#         for ci, cell in enumerate(ws[1], 1):
+#             if cell.value and str(cell.value).strip().lower() == 'delete? (yes/no)':
+#                 delete_col = ci
+#             elif cell.value and str(cell.value).strip().lower() == 'filename':
+#                 filename_col = ci
+#             elif cell.value and str(cell.value).strip().lower() == 'full path':
+#                 fullpath_col = ci
+#             elif cell.value == 'Filename':
+#                 filename_col = ci
+#             elif cell.value == 'Full Path':
+#                 fullpath_col = ci
+
+#         if not delete_col:
+#             print("✗ 'DELETE? (Yes/No)' column not found")
+#             return
+
+#         # Delete marked files
+#         deleted_count = 0
+#         error_count = 0
+
+#         for ri in range(2, ws.max_row + 1):
+#             delete_val = ws.cell(row=ri, column=delete_col).value
+
+#             # if delete_val and str(delete_val).strip().upper() == 'YES':
+#             if str(delete_val).strip().lower() == 'yes':
+#                 filepath = ws.cell(row=ri, column=fullpath_col).value
+#                 filename = ws.cell(row=ri, column=filename_col).value
+
+#                 try:
+#                     if Path(filepath).exists():
+#                         Path(filepath).unlink()
+#                         deleted_count += 1
+#                         print(f"✓ Deleted: {filename}")
+#                     else:
+#                         print(f"⚠ Not found: {filename}")
+#                 except Exception as e:
+#                     error_count += 1
+#                     logger.error(f"Error deleting {filename}: {e}")
+#                     print(f"✗ Error: {filename}")
+
+#         print(f"""
+#     ╔═══════════════════════════════════════════════════╗
+#     ║          TASK 2 COMPLETE                          ║
+#     ╠═══════════════════════════════════════════════════╣
+#     ║ Files deleted:      {deleted_count:>30} ║
+#     ║ Errors:             {error_count:>30} ║
+#     ╚═══════════════════════════════════════════════════╝
+#         """)
+
+#     except Exception as e:
+#         logger.error(f"Error in Task 2: {e}", exc_info=True)
+#         print(f"\n✗ Error: {e}")
+
+
 def task_2_delete(excel_path: str, logger):
     """Task 2: Delete marked files"""
     print("\n" + "="*60)
@@ -200,48 +275,71 @@ def task_2_delete(excel_path: str, logger):
         import openpyxl
 
         wb = openpyxl.load_workbook(excel_path)
-        ws = wb['All Images']
+        ws = wb['Duplicates']  # IMPORTANT: correct sheet
 
-        # Find columns
+        # -----------------------------
+        # Find columns safely
+        # -----------------------------
         delete_col = None
         filename_col = None
         fullpath_col = None
 
         for ci, cell in enumerate(ws[1], 1):
-            if cell.value == 'DELETE? (Yes/No)':
+            if not cell.value:
+                continue
+
+            header = str(cell.value).strip().lower()
+
+            if header == 'delete? (yes/no)':
                 delete_col = ci
-            elif cell.value == 'Filename':
+            elif header == 'filename':
                 filename_col = ci
-            elif cell.value == 'Full Path':
+            elif header == 'full path':
                 fullpath_col = ci
 
         if not delete_col:
-            print("✗ 'DELETE? (Yes/No)' column not found")
+            print("✗ DELETE column not found")
             return
 
-        # Delete marked files
+        # -----------------------------
+        # Delete logic
+        # -----------------------------
         deleted_count = 0
         error_count = 0
 
         for ri in range(2, ws.max_row + 1):
-            delete_val = ws.cell(row=ri, column=delete_col).value
 
-            if delete_val and str(delete_val).strip().upper() == 'YES':
-                filepath = ws.cell(row=ri, column=fullpath_col).value
-                filename = ws.cell(row=ri, column=filename_col).value
+            delete_val = ws.cell(row=ri, column=delete_col).value
+            filepath = ws.cell(row=ri, column=fullpath_col).value if fullpath_col else None
+            filename = ws.cell(row=ri, column=filename_col).value if filename_col else None
+
+            # Normalize delete flag
+            delete_flag = str(delete_val).strip().lower() if delete_val is not None else ""
+
+            if delete_flag in ("yes", "true", "1"):
+
+                if not filepath:
+                    print(f"⚠ Missing path for: {filename}")
+                    continue
 
                 try:
-                    if Path(filepath).exists():
-                        Path(filepath).unlink()
+                    p = Path(filepath)
+
+                    if p.exists():
+                        p.unlink()  # DELETE FILE
                         deleted_count += 1
                         print(f"✓ Deleted: {filename}")
                     else:
                         print(f"⚠ Not found: {filename}")
+
                 except Exception as e:
                     error_count += 1
                     logger.error(f"Error deleting {filename}: {e}")
-                    print(f"✗ Error: {filename}")
+                    print(f"✗ Error deleting: {filename}")
 
+        # -----------------------------
+        # Summary
+        # -----------------------------
         print(f"""
     ╔═══════════════════════════════════════════════════╗
     ║          TASK 2 COMPLETE                          ║
@@ -255,6 +353,7 @@ def task_2_delete(excel_path: str, logger):
         logger.error(f"Error in Task 2: {e}", exc_info=True)
         print(f"\n✗ Error: {e}")
 
+        
 
 def task_3_organize(excel_path: str, config: ConfigManager, logger):
     """Task 3: Organize images by date"""
@@ -281,7 +380,7 @@ def task_3_organize(excel_path: str, config: ConfigManager, logger):
                 value = ws.cell(row=ri, column=col_idx).value
                 record[header] = value
             records.append(record)
-
+        
         # Organize files
         organizer = ImageOrganizer(config.to_dict())
         movements = organizer.organize(records)

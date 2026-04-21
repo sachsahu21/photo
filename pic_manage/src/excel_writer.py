@@ -59,48 +59,48 @@ class ExcelWriter:
         self.output_folder = Path(config.get('output.output_folder', './output'))
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-def write(self, records: List[Dict], scan_folder: str) -> str:
-    """Write Excel report with incremental saves"""
-    parent = Path(scan_folder).name
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = self.output_folder / f"image_scan_{parent}_{ts}.xlsx"
+    def write(self, records: List[Dict], scan_folder: str) -> str:
+        """Write Excel report with incremental saves"""
+        parent = Path(scan_folder).name
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = self.output_folder / f"image_scan_{parent}_{ts}.xlsx"
 
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active)
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
 
-    try:
-        print("Writing All Images sheet...")
-        self._write_all_images(wb, records)
-        wb.save(output_path)
-        print("✓ Saved All Images")
+        try:
+            print("Writing All Images sheet...")
+            self._write_all_images(wb, records)
+            wb.save(output_path)
+            print("✓ Saved All Images")
 
-        print("Writing Blurry Images sheet...")
-        self._write_blurry_images(wb, records)
-        wb.save(output_path)
-        print("✓ Saved Blurry Images")
+            print("Writing Blurry Images sheet...")
+            self._write_blurry_images(wb, records)
+            wb.save(output_path)
+            print("✓ Saved Blurry Images")
 
-        print("Writing Duplicates sheet...")
-        self._write_duplicates(wb, records)
-        wb.save(output_path)
-        print("✓ Saved Duplicates")
+            print("Writing Duplicates sheet...")
+            self._write_duplicates(wb, records)
+            wb.save(output_path)
+            print("✓ Saved Duplicates")
 
-        print("Writing Quality Report sheet...")
-        self._write_quality_report(wb, records)
-        wb.save(output_path)
-        print("✓ Saved Quality Report")
+            print("Writing Quality Report sheet...")
+            self._write_quality_report(wb, records)
+            wb.save(output_path)
+            print("✓ Saved Quality Report")
 
-        print("Writing Summary sheet...")
-        self._write_summary(wb, records, scan_folder)
-        wb.save(output_path)
-        print("✓ Saved Summary")
+            print("Writing Summary sheet...")
+            self._write_summary(wb, records, scan_folder)
+            wb.save(output_path)
+            print("✓ Saved Summary")
 
-        logger.info(f"Excel report saved: {output_path}")
-        return str(output_path)
+            logger.info(f"Excel report saved: {output_path}")
+            return str(output_path)
 
-    except Exception as e:
-        logger.error(f"Error writing Excel: {e}")
-        print(f"✗ Error: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"Error writing Excel: {e}")
+            print(f"✗ Error: {e}")
+            raise
 
 
     def _write_all_images(self, wb: openpyxl.Workbook, records: List[Dict]):

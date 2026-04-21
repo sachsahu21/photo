@@ -3,7 +3,7 @@
 # Scan Settings
 scan:
   # Folder to scan (required)
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\"
 
   # Recursive scan (include subfolders)
   recursive: true
@@ -11,6 +11,9 @@ scan:
   # Image extensions to scan
   extensions:
     - jpg
+    - .jpg
+    - JPG
+    - .JPG
     - jpeg
     - png
     - gif
@@ -67,7 +70,7 @@ duplicates:
 # Organization Settings
 organization:
   # Base folder for organized images
-  output_folder: "C:\\Users\\issuser\\Desktop\\Sachin\\organized_photos"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
 
   # Folder structure: year/month, year/month/day, etc.
   folder_structure: "year/month"  # Options: year, year/month, year/month/day
