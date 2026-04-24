@@ -1,98 +1,88 @@
+# =========================================================
 # Image Scanner Configuration
+# =========================================================
 
-# Scan Settings
 scan:
-  # Folder to scan (required)
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\"
-
-  # Recursive scan (include subfolders)
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Diwali pics"
   recursive: true
 
-  # Image extensions to scan
   extensions:
-    - jpg
-    - .jpg
-    - JPG
-    - .JPG
-    - jpeg
-    - png
-    - gif
-    - bmp
-    - tiff
-    - tif
-    - webp
-    - heic
-    - heif
-    - raw
-    - cr2
-    - nef
-    - arw
-    - dng
-    - orf
-    - rw2
-    - pef
+    images:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - tiff
+      - tif
+      - webp
+      - heic
+      - heif
+      - raw
+      - cr2
+      - nef
+      - arw
+      - dng
+      - orf
+      - rw2
+      - pef
 
-# Blur Detection Settings
+    videos:
+      - mp4
+      - mov
+      - avi
+      - mkv
+      - 3gp
+      - m4v
+      - mpg
+      - mpeg
+      - wmv
+      - flv
+      - webm
+      - mts
+
+# =========================================================
+# BLUR DETECTION
+# =========================================================
 blur_detection:
-  # Enable blur detection
   enabled: true
-
-  # Laplacian variance threshold
-  # Lower = more sensitive to blur
-  # Recommended: 50-150
   threshold: 100
-
-  # Quality thresholds (0-100)
   quality_thresholds:
-    excellent: 80
-    good: 60
-    fair: 40
-    poor: 0
+    very_blurry: 50
+    blurry: 100
+    fair: 200
 
-# Duplicate Detection
+# =========================================================
+# DUPLICATE DETECTION
+# =========================================================
 duplicates:
-  # Enable duplicate detection
   enabled: true
-
-  # Hash algorithm (md5, sha256)
-  hash_algorithm: "md5"
-
-  # Automatic best selection
+  hash_algorithm: "md5"         # md5 or sha256
+  match_mode: "exact"           # "exact" = hash match, "similar" = perceptual hash
+  similarity_threshold: 90      # 0-100%, only used when match_mode = "similar"
   auto_select_best: true
-
-  # Selection criteria (quality, size, date, resolution)
   selection_criteria:
-    - quality      # Highest quality score
-    - resolution   # Highest megapixels
-    - date         # Newest file
-    - size         # Largest file
+    - quality
+    - resolution
+    - date
+    - size
 
-# Organization Settings
+# =========================================================
+# ORGANIZATION
+# =========================================================
 organization:
-  # Base folder for organized images
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
-
-  # Folder structure: year/month, year/month/day, etc.
-  folder_structure: "year/month"  # Options: year, year/month, year/month/day
-
-  # Use EXIF date or file modified date
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  day_threshold: 60             # >= 60 pics on a day -> YYYYMMDD, else YYYYMM00
   use_exif_date: true
+  operation: "copy"             # "copy" or "move"
+  conflict_resolution: "overwrite" # "rename", "skip", "overwrite"
 
-  # Copy or move files
-  operation: "copy"  # Options: copy, move
-
-  # Handle filename conflicts
-  conflict_resolution: "rename"  # Options: rename, skip, overwrite
-
-# Output Settings
+# =========================================================
+# OUTPUT / EXCEL
+# =========================================================
 output:
-  # Output folder for Excel reports
-  output_folder: "./output"
-
-  # Excel filename prefix
+  output_folder: "./reports"
   filename_prefix: "image_scan"
-
-  # Generate separate sheets
   sheets:
     all_images: true
     blurry_images: true
@@ -100,25 +90,19 @@ output:
     summary: true
     quality_report: true
 
-# Processing Settings
+# =========================================================
+# PROCESSING
+# =========================================================
 processing:
-  # Number of parallel threads
-  # 0 = auto (CPU count)
   threads: 0
-
-  # Show progress bar
   show_progress: true
+  verbose: false
 
-  # Verbose logging
-  verbose: true
-
-# Logging
+# =========================================================
+# LOGGING
+# =========================================================
 logging:
-  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
   level: "INFO"
-
-  # Log file path
   file: "./logs/image_scanner.log"
-
-  # Console output
   console: true
+  

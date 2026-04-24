@@ -1,3 +1,8 @@
+
+
+# ============================================================
+# FILE: main.py
+# ============================================================
 """
 Image Scanner - Main Entry Point
 """
@@ -14,26 +19,56 @@ from src.duplicate_handler import DuplicateHandler
 from src.organizer import ImageOrganizer
 from src.excel_writer import ExcelWriter
 
-def setup_logging(config: ConfigManager):
-    """Setup logging"""
+
+BACKUP_FILE = 'records_backup.pkl'
+
+
+def setup_logging(config):
     log_level = config.get('logging.level', 'INFO')
     log_file = config.get('logging.file', './logs/image_scanner.log')
+    log_console = config.get('logging.console', True)
 
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
+    handlers = [logging.FileHandler(log_file, encoding='utf-8')]
+    if log_console:
+        handlers.append(logging.StreamHandler())
+
     logging.basicConfig(
-        level=getattr(logging, log_level),
+        level=getattr(logging, str(log_level).upper(), logging.INFO),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=handlers,
     )
+
     return logging.getLogger(__name__)
 
 
+def save_backup(records, filename=BACKUP_FILE):
+    try:
+        with open(filename, 'wb') as f:
+            pickle.dump(records, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"  ✓ Backup saved: {filename} ({len(records)} records)")
+        return filename
+    except Exception as e:
+        print(f"  ⚠ Backup failed: {e}")
+        return None
+
+
+def load_backup(filename=BACKUP_FILE):
+    try:
+        if not Path(filename).exists():
+            print(f"  ✗ Backup not found: {filename}")
+            return None
+        with open(filename, 'rb') as f:
+            records = pickle.load(f)
+        print(f"  ✓ Loaded {len(records)} records from backup")
+        return records
+    except Exception as e:
+        print(f"  ✗ Backup load error: {e}")
+        return None
+
+
 def print_banner():
-    """Print banner"""
     print("""
     ╔═══════════════════════════════════════════════════════╗
     ║        IMAGE SCANNER - Professional Edition           ║
@@ -44,422 +79,406 @@ def print_banner():
 
 
 def print_menu():
-    """Print menu"""
     print("""
     ┌─────────────────────────────────────────────────────┐
     │ MAIN MENU                                           │
     ├─────────────────────────────────────────────────────┤
-    │ 1. Task 1: Scan & Extract Metadata                 │
-    │ 1b. Task 1B: Resume Excel Write (from backup)      │
-    │ 2. Task 2: Delete Marked Files                     │
-    │ 3. Task 3: Organize Images by Date                 │
-    │ 4. Full Workflow (1 → 2 → 3)                       │
-    │ 5. Exit                                            │
+    │ 1.  Scan & Extract Metadata                        │
+    │ 1b. Resume Excel Write (from backup)               │
+    │ 2.  Delete Marked Files                            │
+    │ 3.  Organize Images by Date                        │
+    │ 4.  Full Workflow (1 -> 2 -> 3)                    │
+    │ 5.  Exit                                           │
     └─────────────────────────────────────────────────────┘
     """)
 
 
-def save_records_backup(records, filename='records_backup.pkl'):
-    """Save records to pickle file"""
-    try:
-        pickle.dump(records, open(filename, 'wb'))
-        print(f"✓ Backup saved: {filename}")
-        return filename
-    except Exception as e:
-        print(f"⚠ Could not save backup: {e}")
-        return None
+def print_box(title, rows):
+    w = 55
+    print(f"\n    ╔{'═' * w}╗")
+    print(f"    ║  {title:<{w - 2}}║")
+    print(f"    ╠{'═' * w}╣")
+    for label, value in rows:
+        line = f"  {label}: {value}"
+        print(f"    ║{line:<{w}}║")
+    print(f"    ╚{'═' * w}╝")
 
 
-def load_records_backup(filename='records_backup.pkl'):
-    """Load records from pickle file"""
-    try:
-        if not Path(filename).exists():
-            print(f"✗ Backup not found: {filename}")
-            return None
+def task_1_scan(config, logger):
+    """Scan folder, extract metadata, detect blur/duplicates, generate Excel."""
+    print("\n" + "=" * 60)
+    print("  TASK 1: SCAN & EXTRACT METADATA")
+    print("=" * 60)
 
-        records = pickle.load(open(filename, 'rb'))
-        print(f"✓ Loaded {len(records)} records from backup")
-        return records
-    except Exception as e:
-        print(f"✗ Error loading backup: {e}")
-        return None
-
-
-def task_1_scan(config: ConfigManager, logger) -> Optional[str]:
-    """Task 1: Scan and extract metadata"""
-    print("\n" + "="*60)
-    print("TASK 1: SCAN & EXTRACT METADATA")
-    print("="*60)
+    records = None
 
     try:
         scanner = ImageScanner(config.to_dict())
         scan_folder = config.get('scan.folder_path')
+
+        print(f"\n  Scanning: {scan_folder}")
         records = scanner.scan(scan_folder)
-        # print(config.to_dict())
 
         if not records:
-            print("⚠ No images found")
+            print("  ⚠ No files found!")
+            print("  Tips: Check scan.folder_path and extensions in config.yaml")
             return None
 
-        print(f"\n✓ Found {len(records)} images")
+        print(f"\n  ✓ Found {len(records)} files")
 
-        # Save backup before processing
-        save_records_backup(records)
+        # Count types
+        img_count = sum(1 for r in records if r.get('file_type') == 'image')
+        vid_count = sum(1 for r in records if r.get('file_type') == 'video')
+        print(f"    Images: {img_count}, Videos: {vid_count}")
 
-        # Mark duplicates
-        dup_handler = DuplicateHandler(
-            selection_criteria=config.get('duplicates.selection_criteria', ['quality', 'resolution', 'date', 'size'])
+        save_backup(records)
+
+        # Duplicates
+        if config.get('duplicates.enabled', True):
+            print("\n  Detecting duplicates...")
+            dup_handler = DuplicateHandler(
+                hash_algorithm=config.get('duplicates.hash_algorithm', 'md5'),
+                selection_criteria=config.get('duplicates.selection_criteria',
+                                               ['quality', 'resolution', 'date', 'size']),
+                match_mode=config.get('duplicates.match_mode', 'exact'),
+                similarity_threshold=config.get('duplicates.similarity_threshold', 90),
+            )
+            records = dup_handler.mark_duplicates(records)
+
+        save_backup(records)
+
+        dup_count = sum(1 for r in records if str(r.get('is_duplicate', '')).upper() == 'YES')
+        dup_grps = len(set(
+            r.get('duplicate_group') for r in records
+            if r.get('duplicate_group') and str(r.get('duplicate_group')).strip()
+        ))
+        blur_count = sum(1 for r in records if r.get('is_blurry') is True)
+        delete_count = sum(
+            1 for r in records
+            if str(r.get('delete_flag', '')).strip().lower() in ('yes', 'true', '1')
         )
-        records = dup_handler.mark_duplicates(records)
 
-        # Save backup after processing
-        save_records_backup(records)
+        print(f"  ✓ {blur_count} blurry images")
+        print(f"  ✓ {dup_count} duplicates in {dup_grps} groups")
+        print(f"  ✓ {delete_count} auto-marked for deletion")
 
-        dup_count = sum(1 for r in records if r.get('is_duplicate') == 'YES')
-        dup_grps = len(set(r.get('duplicate_group') for r in records if r.get('duplicate_group')))
-        blur_count = sum(1 for r in records if r.get('is_blurry') == True)
-
-        print(f"✓ Detected {blur_count} blurry images")
-        print(f"✓ Found {dup_count} duplicates in {dup_grps} groups")
-
-        # Generate Excel
-        print("\nGenerating Excel report (this may take a while)...")
+        print("\n  Generating Excel report...")
         excel_writer = ExcelWriter(config.to_dict())
         excel_path = excel_writer.write(records, scan_folder)
 
-        print(f"""
-    ╔═══════════════════════════════════════════════════╗
-    ║          TASK 1 COMPLETE                          ║
-    ╠═══════════════════════════════════════════════════╣
-    ║ Total images:       {len(records):>30} ║
-    ║ Blurry images:      {blur_count:>30} ║
-    ║ Duplicate files:    {dup_count:>30} ║
-    ║ Duplicate groups:   {dup_grps:>30} ║
-    ╚═══════════════════════════════════════════════════╝
-
-    Excel file: {excel_path}
-    Backup file: records_backup.pkl
-        """)
+        print_box("TASK 1 COMPLETE", [
+            ("Total files", len(records)),
+            ("Images", img_count),
+            ("Videos", vid_count),
+            ("Blurry", blur_count),
+            ("Duplicates", dup_count),
+            ("Groups", dup_grps),
+            ("Delete marked", delete_count),
+            ("Excel", excel_path),
+            ("Backup", BACKUP_FILE),
+        ])
 
         return excel_path
 
     except Exception as e:
-        logger.error(f"Error in Task 1: {e}", exc_info=True)
-        print(f"\n✗ Error: {e}")
-        print("Attempting to save backup...")
-        try:
-            save_records_backup(records)
-            print("✓ Partial data saved to records_backup.pkl")
-        except:
-            pass
+        logger.error(f"Task 1 error: {e}", exc_info=True)
+        print(f"\n  ✗ Error: {e}")
+        if records:
+            save_backup(records)
         return None
 
 
-def task_1b_resume_excel(config: ConfigManager, logger) -> Optional[str]:
-    """Task 1B: Resume Excel write from backup"""
-    print("\n" + "="*60)
-    print("TASK 1B: RESUME EXCEL WRITE")
-    print("="*60)
+def task_1b_resume(config, logger):
+    """Resume Excel generation from backup."""
+    print("\n" + "=" * 60)
+    print("  TASK 1B: RESUME EXCEL FROM BACKUP")
+    print("=" * 60)
 
     try:
-        # Load backup
-        records = load_records_backup('records_backup.pkl')
+        records = load_backup()
         if not records:
             return None
 
-        # Get scan folder
         scan_folder = config.get('scan.folder_path')
 
-        # Write Excel
-        print("\nGenerating Excel report...")
-        excel_writer = ExcelWriter(config.to_dict())
-        excel_path = excel_writer.write(records, scan_folder)
+        print("\n  Generating Excel...")
+        writer = ExcelWriter(config.to_dict())
+        path = writer.write(records, scan_folder)
 
-        print(f"""
-    ╔═══════════════════════════════════════════════════╗
-    ║          TASK 1B COMPLETE                         ║
-    ╠═══════════════════════════════════════════════════╣
-    ║ Excel file: {excel_path}
-    ╚═══════════════════════════════════════════════════╝
-        """)
-
-        return excel_path
+        print_box("TASK 1B COMPLETE", [
+            ("Records", len(records)),
+            ("Excel", path),
+        ])
+        return path
 
     except Exception as e:
-        logger.error(f"Error in Task 1B: {e}", exc_info=True)
-        print(f"\n✗ Error: {e}")
+        logger.error(f"Task 1B error: {e}", exc_info=True)
+        print(f"\n  ✗ Error: {e}")
         return None
 
 
-# def task_2_delete(excel_path: str, logger):
-#     """Task 2: Delete marked files"""
-#     print("\n" + "="*60)
-#     print("TASK 2: DELETE MARKED FILES")
-#     print("="*60)
-
-#     try:
-#         import openpyxl
-
-#         wb = openpyxl.load_workbook(excel_path)
-#         ws = wb['All Images']
-
-#         # Find columns
-#         delete_col = None
-#         filename_col = None
-#         fullpath_col = None
-
-#         # for ci, cell in enumerate(ws[1], 1):
-#         #     if cell.value == 'DELETE? (Yes/No)':
-#         #         delete_col = ci
-#         for ci, cell in enumerate(ws[1], 1):
-#             if cell.value and str(cell.value).strip().lower() == 'delete? (yes/no)':
-#                 delete_col = ci
-#             elif cell.value and str(cell.value).strip().lower() == 'filename':
-#                 filename_col = ci
-#             elif cell.value and str(cell.value).strip().lower() == 'full path':
-#                 fullpath_col = ci
-#             elif cell.value == 'Filename':
-#                 filename_col = ci
-#             elif cell.value == 'Full Path':
-#                 fullpath_col = ci
-
-#         if not delete_col:
-#             print("✗ 'DELETE? (Yes/No)' column not found")
-#             return
-
-#         # Delete marked files
-#         deleted_count = 0
-#         error_count = 0
-
-#         for ri in range(2, ws.max_row + 1):
-#             delete_val = ws.cell(row=ri, column=delete_col).value
-
-#             # if delete_val and str(delete_val).strip().upper() == 'YES':
-#             if str(delete_val).strip().lower() == 'yes':
-#                 filepath = ws.cell(row=ri, column=fullpath_col).value
-#                 filename = ws.cell(row=ri, column=filename_col).value
-
-#                 try:
-#                     if Path(filepath).exists():
-#                         Path(filepath).unlink()
-#                         deleted_count += 1
-#                         print(f"✓ Deleted: {filename}")
-#                     else:
-#                         print(f"⚠ Not found: {filename}")
-#                 except Exception as e:
-#                     error_count += 1
-#                     logger.error(f"Error deleting {filename}: {e}")
-#                     print(f"✗ Error: {filename}")
-
-#         print(f"""
-#     ╔═══════════════════════════════════════════════════╗
-#     ║          TASK 2 COMPLETE                          ║
-#     ╠═══════════════════════════════════════════════════╣
-#     ║ Files deleted:      {deleted_count:>30} ║
-#     ║ Errors:             {error_count:>30} ║
-#     ╚═══════════════════════════════════════════════════╝
-#         """)
-
-#     except Exception as e:
-#         logger.error(f"Error in Task 2: {e}", exc_info=True)
-#         print(f"\n✗ Error: {e}")
-
-
-def task_2_delete(excel_path: str, logger):
-    """Task 2: Delete marked files"""
-    print("\n" + "="*60)
-    print("TASK 2: DELETE MARKED FILES")
-    print("="*60)
+def task_2_delete(excel_path, logger):
+    """Delete files marked 'Yes' in the Duplicates sheet."""
+    print("\n" + "=" * 60)
+    print("  TASK 2: DELETE MARKED FILES")
+    print("=" * 60)
 
     try:
         import openpyxl
 
         wb = openpyxl.load_workbook(excel_path)
-        ws = wb['Duplicates']  # IMPORTANT: correct sheet
 
-        # -----------------------------
-        # Find columns safely
-        # -----------------------------
-        delete_col = None
-        filename_col = None
-        fullpath_col = None
+        sheet_name = None
+        for name in ['Duplicates', 'All Images']:
+            if name in wb.sheetnames:
+                sheet_name = name
+                break
+
+        if not sheet_name:
+            print("  ✗ No suitable sheet found")
+            return
+
+        ws = wb[sheet_name]
+        print(f"  Reading: {sheet_name}")
+
+        delete_col = fullpath_col = filename_col = None
 
         for ci, cell in enumerate(ws[1], 1):
             if not cell.value:
                 continue
-
-            header = str(cell.value).strip().lower()
-
-            if header == 'delete? (yes/no)':
+            h = str(cell.value).strip().lower()
+            if 'delete' in h:
                 delete_col = ci
-            elif header == 'filename':
-                filename_col = ci
-            elif header == 'full path':
+            elif h == 'full path':
                 fullpath_col = ci
+            elif h == 'filename':
+                filename_col = ci
 
         if not delete_col:
-            print("✗ DELETE column not found")
+            print("  ✗ DELETE column not found")
+            print(f"  Headers: {[c.value for c in ws[1] if c.value]}")
             return
 
-        # -----------------------------
-        # Delete logic
-        # -----------------------------
-        deleted_count = 0
-        error_count = 0
+        if not fullpath_col:
+            print("  ✗ Full Path column not found")
+            return
 
+        to_delete = []
         for ri in range(2, ws.max_row + 1):
+            val = ws.cell(row=ri, column=delete_col).value
+            if val and str(val).strip().lower() in ('yes', 'true', '1'):
+                fp = ws.cell(row=ri, column=fullpath_col).value
+                fn = ws.cell(row=ri, column=filename_col).value if filename_col else 'unknown'
+                to_delete.append((fp, fn))
 
-            delete_val = ws.cell(row=ri, column=delete_col).value
-            filepath = ws.cell(row=ri, column=fullpath_col).value if fullpath_col else None
-            filename = ws.cell(row=ri, column=filename_col).value if filename_col else None
+        if not to_delete:
+            print("  ✓ No files marked for deletion")
+            return
 
-            # Normalize delete flag
-            delete_flag = str(delete_val).strip().lower() if delete_val is not None else ""
+        print(f"\n  {len(to_delete)} files marked for deletion.")
+        confirm = input("  Confirm delete? (yes/no): ").strip().lower()
+        if confirm != 'yes':
+            print("  ✗ Cancelled")
+            return
 
-            if delete_flag in ("yes", "true", "1"):
+        deleted = errors = not_found = 0
 
-                if not filepath:
-                    print(f"⚠ Missing path for: {filename}")
-                    continue
+        for fp, fn in to_delete:
+            if not fp:
+                print(f"  ⚠ No path for: {fn}")
+                errors += 1
+                continue
+            try:
+                p = Path(fp)
+                if p.exists():
+                    p.unlink()
+                    deleted += 1
+                    print(f"  ✓ Deleted: {fn}")
+                else:
+                    not_found += 1
+                    print(f"  ⚠ Not found: {fn}")
+            except Exception as e:
+                errors += 1
+                logger.error(f"Delete error {fn}: {e}")
+                print(f"  ✗ Error: {fn}")
 
-                try:
-                    p = Path(filepath)
+        print_box("TASK 2 COMPLETE", [
+            ("Deleted", deleted),
+            ("Not found", not_found),
+            ("Errors", errors),
+        ])
 
-                    if p.exists():
-                        p.unlink()  # DELETE FILE
-                        deleted_count += 1
-                        print(f"✓ Deleted: {filename}")
-                    else:
-                        print(f"⚠ Not found: {filename}")
-
-                except Exception as e:
-                    error_count += 1
-                    logger.error(f"Error deleting {filename}: {e}")
-                    print(f"✗ Error deleting: {filename}")
-
-        # -----------------------------
-        # Summary
-        # -----------------------------
-        print(f"""
-    ╔═══════════════════════════════════════════════════╗
-    ║          TASK 2 COMPLETE                          ║
-    ╠═══════════════════════════════════════════════════╣
-    ║ Files deleted:      {deleted_count:>30} ║
-    ║ Errors:             {error_count:>30} ║
-    ╚═══════════════════════════════════════════════════╝
-        """)
-
+    except ImportError:
+        print("  ✗ openpyxl not installed")
     except Exception as e:
-        logger.error(f"Error in Task 2: {e}", exc_info=True)
-        print(f"\n✗ Error: {e}")
+        logger.error(f"Task 2 error: {e}", exc_info=True)
+        print(f"\n  ✗ Error: {e}")
 
-        
 
-def task_3_organize(excel_path: str, config: ConfigManager, logger):
-    """Task 3: Organize images by date"""
-    print("\n" + "="*60)
-    print("TASK 3: ORGANIZE IMAGES BY DATE")
-    print("="*60)
+def task_3_organize(excel_path, config, logger):
+    """Organize images by date from Excel data."""
+    print("\n" + "=" * 60)
+    print("  TASK 3: ORGANIZE IMAGES BY DATE")
+    print("=" * 60)
 
     try:
         import openpyxl
 
         wb = openpyxl.load_workbook(excel_path)
-        ws = wb['All Images']
 
-        # Parse records from Excel
-        records = []
+        sheet_name = None
+        for name in ['All Images', 'Duplicates']:
+            if name in wb.sheetnames:
+                sheet_name = name
+                break
+
+        if not sheet_name:
+            print("  ✗ No suitable sheet found")
+            return
+
+        ws = wb[sheet_name]
+        print(f"  Reading: {sheet_name}")
+
         col_map = {}
-
         for ci, cell in enumerate(ws[1], 1):
-            col_map[cell.value] = ci
+            if cell.value:
+                col_map[str(cell.value).strip()] = ci
 
+        header_to_key = {
+            'Filename': 'filename',
+            'Folder': 'folder',
+            'Full Path': 'full_path',
+            'Format': 'extension',
+            'Type': 'file_type',
+            'Size (MB)': 'size_mb',
+            'Date Taken': 'date_taken',
+            'File Modified': 'file_modified',
+            'DELETE? (Yes/No)': 'delete_flag',
+            'Quality %': 'quality_score',
+            'Blur Score': 'blur_score',
+            'MD5 Hash': 'md5_hash',
+            'Duplicate?': 'is_duplicate',
+            'Best?': 'is_best_in_group',
+            'Group': 'duplicate_group',
+            'Dup Group': 'duplicate_group',
+            'Recommendation': 'recommendation',
+            'Duration': 'video_duration_fmt',
+            'Duration (s)': 'video_duration_sec',
+            'FPS': 'video_fps',
+            'Codec': 'video_codec',
+            'Bitrate (kbps)': 'video_bitrate_kbps',
+        }
+
+        records = []
         for ri in range(2, ws.max_row + 1):
-            record = {}
-            for header, col_idx in col_map.items():
-                value = ws.cell(row=ri, column=col_idx).value
-                record[header] = value
-            records.append(record)
-        
-        # Organize files
+            rec = {}
+            for header, ci in col_map.items():
+                val = ws.cell(row=ri, column=ci).value
+                key = header_to_key.get(header, header.lower().replace(' ', '_'))
+                rec[key] = val
+                rec[header] = val
+            records.append(rec)
+
+        print(f"  Loaded {len(records)} records")
+
         organizer = ImageOrganizer(config.to_dict())
         movements = organizer.organize(records)
 
-        success_count = sum(1 for m in movements if m['status'] == 'Success')
-        error_count = sum(1 for m in movements if 'Error' in m['status'])
+        success = sum(1 for m in movements if m['status'] == 'Success')
+        errors = sum(1 for m in movements if 'Error' in m['status'])
+        skipped = sum(1 for m in movements if 'Skip' in m['status'])
 
-        print(f"""
-    ╔═══════════════════════════════════════════════════╗
-    ║          TASK 3 COMPLETE                          ║
-    ╠═══════════════════════════════════════════════════╣
-    ║ Files organized:    {success_count:>30} ║
-    ║ Errors:             {error_count:>30} ║
-    ║ Output: {config.get('organization.output_folder'):>45} ║
-    ╚═══════════════════════════════════════════════════╝
-        """)
+        print_box("TASK 3 COMPLETE", [
+            ("Organized", success),
+            ("Skipped", skipped),
+            ("Errors", errors),
+            ("Output", config.get('organization.output_folder', '')),
+        ])
 
+    except ImportError:
+        print("  ✗ openpyxl not installed")
     except Exception as e:
-        logger.error(f"Error in Task 3: {e}", exc_info=True)
-        print(f"\n✗ Error: {e}")
+        logger.error(f"Task 3 error: {e}", exc_info=True)
+        print(f"\n  ✗ Error: {e}")
 
 
 def main():
-    """Main entry point"""
+    """Main entry point with interactive menu."""
     try:
         print_banner()
 
         config = ConfigManager()
         logger = setup_logging(config)
-        logger.info("Application started")
+        logger.info("=" * 50)
+        logger.info("Image Scanner started")
+
+        print(f"  Config: {config.config_path}")
+        print(f"  Scan: {config.get('scan.folder_path')}")
+
+        if not config.validate():
+            print("\n  ⚠ Fix configuration issues before continuing.")
+            resp = input("  Continue anyway? (yes/no): ").strip().lower()
+            if resp != 'yes':
+                return
+
+        last_excel = None
 
         while True:
             print_menu()
-            choice = input("Enter your choice (1-5): ").strip()
+            choice = input("  Choice (1, 1b, 2, 3, 4, 5): ").strip().lower()
 
             if choice == '1':
-                task_1_scan(config, logger)
+                last_excel = task_1_scan(config, logger)
 
             elif choice == '1b':
-                task_1b_resume_excel(config, logger)
+                last_excel = task_1b_resume(config, logger)
 
             elif choice == '2':
-                excel_path = input("Enter Excel file path: ").strip()
-                if Path(excel_path).exists():
-                    task_2_delete(excel_path, logger)
+                path = input("  Excel path (Enter for last): ").strip()
+                if not path and last_excel:
+                    path = last_excel
+                    print(f"  Using: {path}")
+                if path and Path(path).exists():
+                    task_2_delete(path, logger)
                 else:
-                    print(f"✗ File not found: {excel_path}")
+                    print(f"  ✗ Not found: {path}")
 
             elif choice == '3':
-                excel_path = input("Enter Excel file path: ").strip()
-                if Path(excel_path).exists():
-                    task_3_organize(excel_path, config, logger)
+                path = input("  Excel path (Enter for last): ").strip()
+                if not path and last_excel:
+                    path = last_excel
+                    print(f"  Using: {path}")
+                if path and Path(path).exists():
+                    task_3_organize(path, config, logger)
                 else:
-                    print(f"✗ File not found: {excel_path}")
+                    print(f"  ✗ Not found: {path}")
 
             elif choice == '4':
-                excel_path = task_1_scan(config, logger)
-                if excel_path:
-                    input("\nPress Enter for Task 2...")
-                    task_2_delete(excel_path, logger)
-                    input("\nPress Enter for Task 3...")
-                    task_3_organize(excel_path, config, logger)
+                print("\n  Full Workflow: Scan -> Delete -> Organize")
+                last_excel = task_1_scan(config, logger)
+                if last_excel:
+                    print("\n  Review Excel, then continue.")
+                    if input("  Proceed to Delete? (yes/no): ").strip().lower() == 'yes':
+                        task_2_delete(last_excel, logger)
+                        if input("  Proceed to Organize? (yes/no): ").strip().lower() == 'yes':
+                            task_3_organize(last_excel, config, logger)
 
             elif choice == '5':
-                print("\n✓ Goodbye!")
+                print("\n  ✓ Goodbye!")
                 logger.info("Application closed")
                 break
 
             else:
-                print("✗ Invalid choice")
+                print("  ✗ Invalid choice")
 
-            input("\nPress Enter to continue...")
+            input("\n  Press Enter to continue...")
 
     except KeyboardInterrupt:
-        print("\n✗ Interrupted")
+        print("\n\n  ✗ Interrupted")
         sys.exit(1)
     except Exception as e:
-        print(f"\n✗ Fatal error: {e}")
-        logging.error(f"Fatal error: {e}", exc_info=True)
+        print(f"\n  ✗ Fatal: {e}")
+        logging.error(f"Fatal: {e}", exc_info=True)
         sys.exit(1)
 
 

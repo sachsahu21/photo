@@ -1,69 +1,97 @@
+
+
+# ============================================================
+# FILE: src/blur_detector.py
+# ============================================================
 """
-Blur Detection Module
-Detects blurry images using Laplacian variance
+Blur Detection - Laplacian variance method
 """
 
 import logging
-from typing import Tuple, Optional
-import cv2
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    logger.warning("OpenCV not available - blur detection disabled")
+
 
 class BlurDetector:
-    """Detect and rate image blur"""
+    """Detect image blur using Laplacian variance."""
 
-    def __init__(self, threshold: float = 100):
+    def __init__(self, threshold=100.0):
+        self.threshold = float(threshold)
+
+    def detect_blur(self, filepath):
         """
-        Initialize blur detector
-
-        Args:
-            threshold: Laplacian variance threshold (lower = more sensitive)
-        """
-        self.threshold = threshold
-
-    def detect_blur(self, filepath: str) -> Tuple[Optional[bool], Optional[float], str]:
-        """
-        Detect if image is blurry
-
-        Args:
-            filepath: Path to image file
-
         Returns:
             Tuple of (is_blurry, blur_score, quality_rating)
-            - is_blurry: True if blurry, False if sharp, None if error
-            - blur_score: Laplacian variance score
-            - quality_rating: String rating (Very Blurry, Blurry, Fair, Sharp, Error)
         """
+        if not CV2_AVAILABLE:
+            return None, None, "N/A (OpenCV missing)"
+
         try:
             img = cv2.imread(str(filepath))
             if img is None:
-                return None, None, "Error: Cannot read image"
+                return None, None, "Error: Cannot read"
 
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-            return self._classify_blur(laplacian_var)
+            return self._classify(laplacian_var)
 
         except Exception as e:
-            logger.warning(f"Error detecting blur in {filepath}: {e}")
-            return None, None, f"Error: {str(e)[:30]}"
+            logger.debug(f"Blur detection error for {filepath}: {e}")
+            return None, None, f"Error: {str(e)[:40]}"
 
-    def _classify_blur(self, blur_score: float) -> Tuple[bool, float, str]:
-        """Classify blur score into categories"""
-        blur_score = round(blur_score, 2)
-
-        if blur_score < self.threshold * 0.5:
-            return True, blur_score, "Very Blurry"
-        elif blur_score < self.threshold:
-            return True, blur_score, "Blurry"
-        elif blur_score < self.threshold * 2:
-            return False, blur_score, "Fair"
+    def _classify(self, score):
+        score = round(score, 2)
+        if score < self.threshold * 0.5:
+            return True, score, "Very Blurry"
+        elif score < self.threshold:
+            return True, score, "Blurry"
+        elif score < self.threshold * 2:
+            return False, score, "Fair"
         else:
-            return False, blur_score, "Sharp"
+            return False, score, "Sharp"
 
-    def set_threshold(self, threshold: float):
-        """Update blur threshold"""
-        self.threshold = threshold
-        logger.info(f"Blur threshold updated to {threshold}")
+    def calculate_quality_score(self, blur_score=None, width=None, height=None, has_exif=False):
+        """Calculate quality score 0-100."""
+        score = 100.0
+        issues = []
+
+        if blur_score is not None and isinstance(blur_score, (int, float)):
+            if blur_score < self.threshold * 0.5:
+                score -= 40
+                issues.append("Very blurry")
+            elif blur_score < self.threshold:
+                score -= 25
+                issues.append("Blurry")
+            elif blur_score < self.threshold * 1.5:
+                score -= 10
+                issues.append("Slightly soft")
+
+        if width and height:
+            mp = (width * height) / 1_000_000
+            if mp < 0.5:
+                score -= 30
+                issues.append("Very low resolution")
+            elif mp < 1.0:
+                score -= 20
+                issues.append("Low resolution")
+            elif mp < 2.0:
+                score -= 10
+                issues.append("Below average resolution")
+
+        if not has_exif:
+            score -= 5
+            issues.append("No EXIF data")
+
+        return round(max(0.0, min(100.0, score)), 1), "; ".join(issues) if issues else "None"
+
+    def set_threshold(self, threshold):
+        self.threshold = float(threshold)
+

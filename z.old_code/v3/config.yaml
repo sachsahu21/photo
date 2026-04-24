@@ -1,0 +1,67 @@
+
+# ============================================================================
+# FILE: config.yaml
+# ============================================================================
+# Image Scanner Configuration
+
+scan:
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Diwali pics"
+  recursive: true
+  supported_extensions:
+    - jpg
+    - jpeg
+    - png
+    - gif
+    - bmp
+    - tiff
+    - webp
+    - heic
+    - raw
+    - cr2
+    - nef
+    - arw
+    - dng
+
+blur_detection:
+  threshold: 100
+  method: "laplacian"
+  quality_thresholds:
+    very_blurry: 50
+    blurry: 100
+    fair: 200
+
+duplicates:
+  hash_algorithm: "md5"
+  selection_criteria:
+    - quality
+    - resolution
+    - date
+    - size
+
+organization:
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  operation_type: "copy"
+  folder_structure: "date_based"
+  date_format: "yyyymmdd"
+  threshold_for_daily_folders: 60
+  handle_conflicts: "rename"
+
+excel:
+  output_folder: "./reports"
+  filename_pattern: "image_scan_{timestamp}.xlsx"
+  freeze_rows: 1
+  auto_filter: true
+  color_scheme:
+    duplicate: "FF0000"
+    blurry: "FFA500"
+    good: "00B050"
+
+logging:
+  level: "INFO"
+  file: "./logs/image_scanner.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+processing:
+  thread_count: 4
+  batch_size: 100
+  timeout_seconds: 3600

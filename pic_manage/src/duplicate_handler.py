@@ -1,158 +1,199 @@
+
+# ============================================================
+# FILE: src/duplicate_handler.py
+# ============================================================
 """
-Duplicate Detection and Handling
+Duplicate Handler - Detects duplicates (exact or similar) and selects best.
 """
 
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional
 from collections import defaultdict
-from pathlib import Path
+from datetime import datetime
+
+from .utils import calculate_file_hash, parse_datetime_flexible
 
 logger = logging.getLogger(__name__)
 
+try:
+    from PIL import Image
+    import numpy as np
+    PHASH_AVAILABLE = True
+except ImportError:
+    PHASH_AVAILABLE = False
+
 
 class DuplicateHandler:
-    """Handle duplicate image detection and best selection"""
+    """Detect duplicates and select best image per group."""
 
-    def __init__(self, selection_criteria: List[str] = None):
-        """
-        Initialize duplicate handler
-
-        Args:
-            selection_criteria: List of criteria for best selection
-                               (quality, resolution, date, size)
-        """
+    def __init__(self, hash_algorithm='md5', selection_criteria=None,
+                 match_mode='exact', similarity_threshold=90):
+        self.hash_algorithm = hash_algorithm
         self.selection_criteria = selection_criteria or ['quality', 'resolution', 'date', 'size']
+        self.match_mode = match_mode
+        self.similarity_threshold = similarity_threshold
 
-    def find_duplicates(self, records: List[Dict]) -> Dict[int, List[Dict]]:
-        """
-        Find duplicate images by MD5 hash
+    def find_duplicates(self, records):
+        if self.match_mode == 'similar' and PHASH_AVAILABLE:
+            return self._find_similar(records)
+        return self._find_exact(records)
 
-        Args:
-            records: List of image records
-
-        Returns:
-            Dictionary mapping group_id to list of duplicate records
-        """
+    def _find_exact(self, records):
         hash_map = defaultdict(list)
+        for idx, rec in enumerate(records):
+            h = rec.get('md5_hash', '')
+            if h:
+                hash_map[h].append(idx)
 
-        for record in records:
-            md5 = record.get('md5_hash')
-            if md5:
-                hash_map[md5].append(record)
+        groups = {}
+        gid = 1
+        for h, indices in hash_map.items():
+            if len(indices) > 1:
+                groups[gid] = indices
+                gid += 1
+        return groups
 
-        # Filter to only groups with duplicates
-        duplicates = {
-            gid: records
-            for gid, records in enumerate(hash_map.values(), 1)
-            if len(records) > 1
-        }
+    def _find_similar(self, records):
+        if not PHASH_AVAILABLE:
+            logger.warning("PIL/numpy not available, falling back to exact match")
+            return self._find_exact(records)
 
-        logger.info(f"Found {len(duplicates)} duplicate groups")
-        return duplicates
+        logger.info("Computing perceptual hashes...")
+        hashes = []
+        for idx, rec in enumerate(records):
+            if rec.get('file_type') != 'image' or not rec.get('full_path'):
+                hashes.append((idx, None))
+                continue
+            try:
+                phash = self._avg_hash(rec['full_path'])
+                hashes.append((idx, phash))
+            except Exception:
+                hashes.append((idx, None))
 
-    def select_best(self, duplicate_group: List[Dict]) -> Dict:
-        """
-        Select best image from duplicate group
+        used = set()
+        groups = {}
+        gid = 1
+        threshold = self.similarity_threshold / 100.0
 
-        Args:
-            duplicate_group: List of duplicate records
+        for i in range(len(hashes)):
+            if i in used or hashes[i][1] is None:
+                continue
+            group = [hashes[i][0]]
+            used.add(i)
 
-        Returns:
-            Best record
-        """
-        if not duplicate_group:
+            for j in range(i + 1, len(hashes)):
+                if j in used or hashes[j][1] is None:
+                    continue
+                sim = self._hash_sim(hashes[i][1], hashes[j][1])
+                if sim >= threshold:
+                    group.append(hashes[j][0])
+                    used.add(j)
+
+            if len(group) > 1:
+                groups[gid] = group
+                gid += 1
+
+        return groups
+
+    def _avg_hash(self, filepath, size=8):
+        img = Image.open(filepath).convert('L').resize((size, size), Image.LANCZOS)
+        pixels = np.array(img, dtype=float)
+        return (pixels > pixels.mean()).flatten()
+
+    def _hash_sim(self, h1, h2):
+        if h1 is None or h2 is None:
+            return 0.0
+        return float(np.sum(h1 == h2)) / len(h1)
+
+    def select_best(self, records, indices):
+        if not indices:
             return None
+        if len(indices) == 1:
+            return indices[0]
 
-        if len(duplicate_group) == 1:
-            return duplicate_group[0]
+        best_idx = indices[0]
+        best_score = self._score(records[best_idx])
 
-        # Score each image
-        scores = []
-        for record in duplicate_group:
-            score = self._calculate_score(record)
-            scores.append((score, record))
+        for idx in indices[1:]:
+            s = self._score(records[idx])
+            if s > best_score:
+                best_score = s
+                best_idx = idx
 
-        # Sort by score (descending) and return best
-        scores.sort(key=lambda x: x[0], reverse=True)
-        best = scores[0][1]
+        return best_idx
 
-        logger.debug(f"Selected best from {len(duplicate_group)} duplicates: {best['filename']}")
-        return best
-
-    def _calculate_score(self, record: Dict) -> float:
-        """
-        Calculate overall score for image selection
-
-        Args:
-            record: Image record
-
-        Returns:
-            Score (0-1000)
-        """
-        score = 0
-
+    def _score(self, record):
+        score = 0.0
         for criterion in self.selection_criteria:
             if criterion == 'quality':
-                quality = record.get('quality_score', 0)
-                score += quality * 5  # Weight: 0-500
+                q = record.get('quality_score')
+                if isinstance(q, (int, float)):
+                    score += q * 100
 
             elif criterion == 'resolution':
-                width = record.get('width', 0) or 0
-                height = record.get('height', 0) or 0
-                megapixels = (width * height) / 1_000_000
-                # Normalize to 0-200 (assuming max 20MP)
-                score += min(megapixels / 20 * 200, 200)
+                w = record.get('width') or 0
+                h = record.get('height') or 0
+                if w and h:
+                    score += (w * h) / 1_000_000 * 10
 
             elif criterion == 'date':
-                # Prefer newer files
-                try:
-                    from datetime import datetime
-                    date_str = record.get('date_taken')
-                    if isinstance(date_str, datetime):
-                        # Newer = higher score
-                        days_old = (datetime.now() - date_str).days
-                        score += max(0, 100 - (days_old / 365 * 100))
-                except:
-                    pass
+                dt = record.get('date_taken')
+                if isinstance(dt, datetime):
+                    try:
+                        score += dt.timestamp() / 1e8
+                    except Exception:
+                        pass
+                elif isinstance(dt, str):
+                    parsed = parse_datetime_flexible(dt)
+                    if parsed:
+                        try:
+                            score += parsed.timestamp() / 1e8
+                        except Exception:
+                            pass
 
             elif criterion == 'size':
-                # Prefer larger files (usually better quality)
-                size_mb = record.get('size_mb', 0) or 0
-                # Normalize to 0-100 (assuming max 50MB)
-                score += min(size_mb / 50 * 100, 100)
+                sz = record.get('size_mb')
+                if isinstance(sz, (int, float)):
+                    score += sz
 
         return score
 
-    def mark_duplicates(self, records: List[Dict]) -> List[Dict]:
-        """
-        Mark duplicates and select best in each group
+    def mark_duplicates(self, records):
+        """Mark all records with duplicate info. ALL group members shown."""
+        logger.info("Starting duplicate detection...")
 
-        Args:
-            records: List of image records
+        for rec in records:
+            rec.setdefault('is_duplicate', 'No')
+            rec.setdefault('duplicate_group', '')
+            rec.setdefault('is_best_in_group', '')
+            rec.setdefault('recommendation', '')
 
-        Returns:
-            Updated records with duplicate info
-        """
-        duplicates = self.find_duplicates(records)
+        groups = self.find_duplicates(records)
+        total_dup = 0
 
-        # Mark all records
-        for record in records:
-            record['is_duplicate'] = 'No'
-            record['duplicate_group'] = ''
-            record['is_best_in_group'] = 'No'
+        for gid, indices in groups.items():
+            label = f"DUP_{gid:04d}"
+            best_idx = self.select_best(records, indices)
 
-        # Mark duplicates and best
-        for group_id, dup_group in duplicates.items():
-            best = self.select_best(dup_group)
+            for idx in indices:
+                records[idx]['is_duplicate'] = 'YES'
+                records[idx]['duplicate_group'] = label
+                total_dup += 1
 
-            for record in dup_group:
-                record['is_duplicate'] = 'YES'
-                record['duplicate_group'] = group_id
-
-                if record == best:
-                    record['is_best_in_group'] = 'Yes'
-                    record['recommendation'] = 'Keep'
+                if idx == best_idx:
+                    records[idx]['is_best_in_group'] = 'Yes'
+                    records[idx]['recommendation'] = 'Keep (Best)'
+                    records[idx]['delete_flag'] = 'No'
                 else:
-                    record['recommendation'] = 'Delete (Duplicate)'
+                    records[idx]['is_best_in_group'] = 'No'
+                    records[idx]['recommendation'] = 'Delete (Duplicate)'
+                    records[idx]['delete_flag'] = 'Yes'
 
+        for rec in records:
+            if rec.get('is_blurry') is True and rec.get('is_duplicate') == 'No':
+                if not rec.get('recommendation'):
+                    rec['recommendation'] = 'Review (Blurry)'
+
+        logger.info(f"Duplicate detection done: {len(groups)} groups, {total_dup} files")
         return records
+

@@ -1,223 +1,223 @@
+
+
+# ============================================================
+# FILE: src/organizer.py
+# ============================================================
 """
-Image Organization Module
-Organize images into folder structure
+Image Organizer - Date-based folder organization
+
+Logic:
+  1. Parse date for each file (EXIF preferred, fallback to file_modified)
+  2. Count files per calendar day
+  3. >= day_threshold files -> YYYYMMDD folder
+  4. < day_threshold files  -> YYYYMM00 monthly bucket
 """
 
-from fileinput import filename
-import logging
 import shutil
+import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple
+from collections import defaultdict
 
-# from numpy import record
+from tqdm import tqdm
+
+from .utils import (
+    parse_datetime_flexible, resolve_filename_conflict,
+    ensure_directory, safe_filename
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ImageOrganizer:
-    """Organize images into folder structure"""
+    """Organize images into date-based folder structure."""
 
-    def __init__(self, config: Dict):
-        """
-        Initialize organizer
+    def __init__(self, config):
+        org_cfg = config.get('organization', {})
 
-        Args:
-            config: Configuration dictionary
-        """
-        
-        self.config = config.get('organization', {})
-        print(self.config)
+        self.output_folder = Path(org_cfg.get('output_folder', './organized_images'))
+        self.day_threshold = int(org_cfg.get('day_threshold', 60))
+        self.use_exif_date = org_cfg.get('use_exif_date', True)
+        self.operation = str(org_cfg.get('operation', 'copy')).lower()
+        self.conflict_strategy = str(org_cfg.get('conflict_resolution', 'rename')).lower()
 
-        print(self.config)
-        output_path = self.config.get('output_folder')
-        if not output_path:
-            raise ValueError("Missing organization.output_folder in config")
+        proc_cfg = config.get('processing', {})
+        self.show_progress = proc_cfg.get('show_progress', True)
 
-        self.output_folder = Path(output_path)
-        self.folder_structure = self.config.get('folder_structure', 'year/month')
-        self.use_exif_date = self.config.get('use_exif_date', True)
-        self.operation = self.config.get('operation', 'copy')
-        self.conflict_resolution = self.config.get('conflict_resolution', 'rename')
+        ensure_directory(self.output_folder)
 
-    def organize(self, records: List[Dict]) -> List[Dict]:
-        """
-        Organize images into folder structure
+        logger.info(f"Organizer: output={self.output_folder}, threshold={self.day_threshold}, "
+                     f"operation={self.operation}")
 
-        Args:
-            records: List of image records
+    def organize(self, records):
+        if not records:
+            logger.warning("No records to organize")
+            return []
 
-        Returns:
-            List of movement records
-        """
-        self.output_folder.mkdir(parents=True, exist_ok=True)
+        active = []
+        for r in records:
+            flag = str(r.get('delete_flag', '') or
+                       r.get('DELETE? (Yes/No)', '') or '').strip().lower()
+            if flag not in ('yes', 'true', '1'):
+                active.append(r)
+
+        logger.info(f"Organizing {len(active)} files "
+                     f"(skipped {len(records) - len(active)} marked for deletion)")
+
+        dated = []
+        for rec in active:
+            dt = self._get_date(rec)
+            dated.append((rec, dt))
+
+        day_counts = defaultdict(int)
+        for rec, dt in dated:
+            if dt:
+                day_counts[dt.strftime('%Y%m%d')] += 1
+
+        day_to_folder = {}
+        for day_key, count in day_counts.items():
+            if count >= self.day_threshold:
+                day_to_folder[day_key] = day_key
+            else:
+                day_to_folder[day_key] = day_key[:6] + '00'
+
+        logger.info(f"Unique days: {len(day_counts)}, "
+                     f"days >= {self.day_threshold}: "
+                     f"{sum(1 for c in day_counts.values() if c >= self.day_threshold)}")
 
         movements = []
+        desc = 'Copying' if self.operation == 'copy' else 'Moving'
 
-        for record in records:
-            # Skip deleted files
-            if record.get('delete_flag', '').upper() == 'YES':
-                continue
+        it = tqdm(dated, desc=f"{desc} files", unit="file",
+                  disable=not self.show_progress)
 
-            try:
-                movement = self._move_or_copy_file(record)
-                movements.append(movement)
-            except Exception as e:
-                # logger.error(f"Error organizing {record['filename']}: {e}")
-                filename = record.get('filename') or record.get('Filename')
-                logger.error(f"Error organizing {filename}: {e}")
-                movements.append({
-                    # 'source_filename': record['filename'],
-                    # 'source_path': record['full_path'],
-                    'source_filename': record.get('filename') or record.get('Filename'),
-                    'source_path': record.get('full_path') or record.get('Full Path'),
-                    'destination_path': '',
-                    'folder_path': '',
-                    'status': f'Error: {str(e)[:50]}'
-                })
+        for rec, dt in it:
+            mv = self._process_file(rec, dt, day_to_folder)
+            movements.append(mv)
 
-        logger.info(f"Organized {len(movements)} images")
+        success = sum(1 for m in movements if m['status'] == 'Success')
+        errors = sum(1 for m in movements if 'Error' in m['status'])
+        skipped = sum(1 for m in movements if 'Skip' in m['status'])
+
+        logger.info(f"Organization done: {success} success, {skipped} skipped, {errors} errors")
+        self._write_report(movements, day_counts, day_to_folder)
+
         return movements
 
-    def _move_or_copy_file(self, record: Dict) -> Dict:
-        """Move or copy single file"""
-        # src_path = Path(record['full_path'])
-        src = record.get('full_path') or record.get('Full Path')
-        if not src:
-            raise ValueError("Missing full_path in record")
+    def _get_date(self, record):
+        if self.use_exif_date:
+            for key in ['date_taken', 'Date Taken']:
+                val = record.get(key)
+                if val:
+                    dt = parse_datetime_flexible(val)
+                    if dt:
+                        return dt
 
-        src_path = Path(src)
+        for key in ['file_modified', 'File Modified']:
+            val = record.get(key)
+            if val:
+                dt = parse_datetime_flexible(val)
+                if dt:
+                    return dt
 
-        # Get destination folder
-        dest_folder = self._get_destination_folder(record)
-        dest_folder.mkdir(parents=True, exist_ok=True)
+        return None
 
-        # Get destination path
-        dest_path = self._get_destination_path(src_path, dest_folder)
+    def _process_file(self, record, dt, day_to_folder):
+        source_str = (record.get('full_path') or record.get('Full Path') or '')
+        filename = (record.get('filename') or record.get('Filename') or '')
 
-        # Perform operation
-        if self.operation == 'move':
-            shutil.move(str(src_path), str(dest_path))
-        else:  # copy
-            shutil.copy2(str(src_path), str(dest_path))
+        if not source_str:
+            return {
+                'filename': filename or 'unknown',
+                'source': '', 'destination': '',
+                'status': 'Error: No source path', 'folder': '',
+            }
 
-        logger.info(f"{'Moved' if self.operation == 'move' else 'Copied'}: {src_path.name} -> {dest_folder}")
+        source = Path(source_str)
+        if not source.exists():
+            return {
+                'filename': filename or source.name,
+                'source': str(source), 'destination': '',
+                'status': 'Error: Source not found', 'folder': '',
+            }
 
-        return {
-            'source_filename': src_path.name,
-            'source_path': str(src_path),
-            'destination_path': str(dest_path),
-            'folder_path': str(dest_folder.relative_to(self.output_folder)),
-            'status': 'Success'
-        }
+        if dt:
+            day_key = dt.strftime('%Y%m%d')
+            folder_name = day_to_folder.get(day_key, day_key[:6] + '00')
+        else:
+            folder_name = 'undated'
 
-    # def _get_destination_folder(self, record: Dict) -> Path:
-    #     """Get destination folder based on configuration"""
-    #     # Get date
-    #     date_taken = record.get('date_taken')
-    #     if isinstance(date_taken, datetime):
-    #         dt = date_taken
-    #     else:
-    #         # Fallback to file modified date
-    #         try:
-    #             dt = datetime.strptime(record['file_modified'], '%Y-%m-%d %H:%M:%S')
-    #         except:
-    #             dt = datetime.now()
+        dest_folder = self.output_folder / folder_name
+        ensure_directory(dest_folder)
 
-    #     # Build folder path based on structure
-    #     parts = []
+        dest_path = dest_folder / safe_filename(source.name)
+        resolved = resolve_filename_conflict(dest_path, self.conflict_strategy)
 
-    #     if 'year' in self.folder_structure:
-    #         parts.append(dt.strftime('%Y'))
+        if resolved is None:
+            return {
+                'filename': source.name,
+                'source': str(source), 'destination': str(dest_path),
+                'status': 'Skipped (conflict)', 'folder': folder_name,
+            }
 
-    #     if 'month' in self.folder_structure:
-    #         parts.append(dt.strftime('%m'))
+        try:
+            if self.operation == 'move':
+                shutil.move(str(source), str(resolved))
+            else:
+                shutil.copy2(str(source), str(resolved))
 
-    #     if 'day' in self.folder_structure:
-    #         parts.append(dt.strftime('%d'))
+            return {
+                'filename': source.name,
+                'source': str(source), 'destination': str(resolved),
+                'status': 'Success', 'folder': folder_name,
+            }
+        except Exception as e:
+            logger.error(f"Error organizing {source.name}: {e}")
+            return {
+                'filename': source.name,
+                'source': str(source), 'destination': str(resolved),
+                'status': f'Error: {str(e)[:80]}', 'folder': folder_name,
+            }
 
-    #     if not parts:
-    #         parts = [dt.strftime('%Y'), dt.strftime('%m')]
+    def _write_report(self, movements, day_counts, day_to_folder):
+        report_path = self.output_folder / 'organization_report.txt'
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("=" * 70 + "\n")
+                f.write("IMAGE ORGANIZATION REPORT\n")
+                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 70 + "\n\n")
 
-    #     dest_folder = self.output_folder
-    #     for part in parts:
-    #         dest_folder = dest_folder / part
+                success = sum(1 for m in movements if m['status'] == 'Success')
+                errors = sum(1 for m in movements if 'Error' in m['status'])
 
-    #     return dest_folder
+                f.write(f"Total processed: {len(movements)}\n")
+                f.write(f"Success: {success}\n")
+                f.write(f"Errors: {errors}\n")
+                f.write(f"Day threshold: {self.day_threshold}\n")
+                f.write(f"Operation: {self.operation}\n\n")
 
-    def _get_destination_folder(self, record: Dict) -> Path:
-        """Get destination folder based on picture Date Taken"""
+                f.write("-" * 50 + "\nFOLDER DISTRIBUTION\n" + "-" * 50 + "\n")
+                folder_counts = defaultdict(int)
+                for m in movements:
+                    if m['status'] == 'Success':
+                        folder_counts[m['folder']] += 1
+                for folder in sorted(folder_counts.keys()):
+                    f.write(f"  {folder}: {folder_counts[folder]} files\n")
 
-        # 1. Extract date safely (handle Excel header variations)
-        date_value = (
-            record.get('date_taken')
-            or record.get('Date Taken')
-            or record.get('file_modified')
-        )
+                f.write(f"\n{'-' * 50}\nDAY ANALYSIS\n{'-' * 50}\n")
+                for day_key in sorted(day_counts.keys()):
+                    count = day_counts[day_key]
+                    folder = day_to_folder.get(day_key, 'unknown')
+                    marker = " *** DAILY" if count >= self.day_threshold else ""
+                    f.write(f"  {day_key}: {count} files -> {folder}{marker}\n")
 
-        dt = None
+                error_list = [m for m in movements if 'Error' in m['status']]
+                if error_list:
+                    f.write(f"\n{'-' * 50}\nERRORS\n{'-' * 50}\n")
+                    for m in error_list:
+                        f.write(f"  {m['filename']}: {m['status']}\n")
 
-        # 2. Convert to datetime
-        if isinstance(date_value, datetime):
-            dt = date_value
-
-        elif isinstance(date_value, str):
-            for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
-                try:
-                    dt = datetime.strptime(date_value.strip(), fmt)
-                    break
-                except:
-                    continue
-
-        # fallback
-        if not dt:
-            dt = datetime.now()
-
-        # 3. Build folder structure (ONLY YEAR/MONTH as required)
-        year = dt.strftime('%Y')
-        month = dt.strftime('%m')
-
-        return self.output_folder / year / month    
-
-    # def _get_destination_path(self, src_path: Path, dest_folder: Path) -> Path:
-    #     """Get destination file path, handling conflicts"""
-    #     dest_path = dest_folder / src_path.name
-
-    #     if not dest_path.exists():
-    #         return dest_path
-
-    #     # Handle conflict
-    #     if self.conflict_resolution == 'skip':
-    #         raise FileExistsError(f"File exists: {dest_path}")
-
-    #     elif self.conflict_resolution == 'overwrite':
-    #         return dest_path
-
-    #     elif self.conflict_resolution == 'rename':
-    #         # Add counter to filename
-    #         counter = 1
-    #         stem = src_path.stem
-    #         suffix = src_path.suffix
-
-    #         while True:
-    #             new_name = f"{stem}_{counter}{suffix}"
-    #             dest_path = dest_folder / new_name
-    #             if not dest_path.exists():
-    #                 return dest_path
-    #             counter += 1
-
-    #     return dest_path
-
-    def _get_destination_path(self, src_path: Path, dest_folder: Path) -> Path:
-        """Get destination path and overwrite if file already exists"""
-
-        dest_path = dest_folder / src_path.name
-
-        # Ensure folder exists
-        dest_folder.mkdir(parents=True, exist_ok=True)
-
-        # 🔥 If file exists, delete it (overwrite behavior)
-        if dest_path.exists():
-            dest_path.unlink()
-
-        return dest_path
+            logger.info(f"Report saved: {report_path}")
+        except Exception as e:
+            logger.error(f"Error writing report: {e}")

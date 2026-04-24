@@ -1,147 +1,250 @@
+
+# ============================================================
+# FILE: src/utils.py
+# ============================================================
 """
-Utility functions
+Utility Functions - Common helpers used across all modules
 """
 
+import os
+import re
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
 from datetime import datetime
+from typing import Optional, Tuple, Any
 
 logger = logging.getLogger(__name__)
 
+HASH_BUFFER_SIZE = 8 * 1024 * 1024
 
-def file_hash(filepath: str, algorithm: str = 'md5') -> Optional[str]:
-    """
-    Calculate file hash
 
-    Args:
-        filepath: Path to file
-        algorithm: Hash algorithm (md5, sha256)
-
-    Returns:
-        Hash string or None if error
-    """
+def calculate_file_hash(filepath, algorithm='md5'):
+    """Calculate file hash using streaming for large files."""
     try:
+        filepath = Path(filepath)
+        if not filepath.exists():
+            return ""
+
         if algorithm == 'sha256':
-            h = hashlib.sha256()
+            hasher = hashlib.sha256()
         else:
-            h = hashlib.md5()
+            hasher = hashlib.md5()
 
         with open(filepath, 'rb') as f:
-            while chunk := f.read(65536):
-                h.update(chunk)
-        return h.hexdigest()
+            while True:
+                chunk = f.read(HASH_BUFFER_SIZE)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+
+        return hasher.hexdigest()
+
     except Exception as e:
-        logger.warning(f"Error calculating hash for {filepath}: {e}")
+        logger.warning(f"Error hashing {filepath}: {e}")
+        return ""
+
+
+def get_file_size_mb(filepath):
+    """Get file size in megabytes."""
+    try:
+        return Path(filepath).stat().st_size / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def get_file_modification_date(filepath):
+    """Get file modification date as datetime."""
+    try:
+        ts = Path(filepath).stat().st_mtime
+        return datetime.fromtimestamp(ts)
+    except Exception:
         return None
 
 
-def get_gps(exif_data: dict) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Extract GPS coordinates from EXIF data
+def parse_datetime_flexible(value):
+    """Parse datetime from various string formats."""
+    if isinstance(value, datetime):
+        return value
 
-    Args:
-        exif_data: EXIF data dictionary
+    if not value or not isinstance(value, str):
+        return None
 
-    Returns:
-        Tuple of (latitude, longitude) or (None, None)
-    """
+    cleaned = str(value).strip().replace('\x00', '')
+    if not cleaned:
+        return None
+
+    formats = [
+        '%Y-%m-%d %H:%M:%S',
+        '%Y:%m:%d %H:%M:%S',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y/%m/%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+        '%Y-%m-%d',
+        '%Y:%m:%d',
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except (ValueError, TypeError):
+            continue
+
+    return None
+
+
+def parse_exif_date(exif_data):
+    """Extract date from EXIF data dictionary."""
+    date_fields = ['DateTimeOriginal', 'DateTimeDigitized', 'DateTime']
+
+    for field in date_fields:
+        val = exif_data.get(field)
+        if val:
+            dt = parse_datetime_flexible(val)
+            if dt:
+                return dt
+
+    return None
+
+
+def parse_gps_coordinates(gps_info):
+    """Parse GPS coordinates from EXIF GPSInfo."""
     try:
-        gps = exif_data.get('GPSInfo', {})
-        if not gps:
+        if not gps_info or not isinstance(gps_info, dict):
             return None, None
 
-        def to_dec(v):
-            return float(v[0]) + float(v[1]) / 60 + float(v[2]) / 3600
+        def to_degrees(value):
+            if isinstance(value, (list, tuple)) and len(value) == 3:
+                d = float(value[0])
+                m = float(value[1])
+                s = float(value[2])
+                return d + m / 60.0 + s / 3600.0
+            return None
 
-        lat = to_dec(gps.get(2, (0, 0, 0)))
-        lon = to_dec(gps.get(4, (0, 0, 0)))
+        lat_val = gps_info.get(2)
+        lat_ref = gps_info.get(1)
+        lon_val = gps_info.get(4)
+        lon_ref = gps_info.get(3)
 
-        if gps.get(1) == 'S':
-            lat = -lat
-        if gps.get(3) == 'W':
-            lon = -lon
+        lat = to_degrees(lat_val) if lat_val else None
+        lon = to_degrees(lon_val) if lon_val else None
 
-        return round(lat, 6), round(lon, 6)
+        if lat is not None and lat_ref:
+            ref = str(lat_ref).strip().upper()
+            if ref == 'S':
+                lat = -lat
+
+        if lon is not None and lon_ref:
+            ref = str(lon_ref).strip().upper()
+            if ref == 'W':
+                lon = -lon
+
+        return lat, lon
+
     except Exception as e:
-        logger.debug(f"Error extracting GPS: {e}")
+        logger.debug(f"GPS parse error: {e}")
         return None, None
 
 
-def safe_string(value: str, max_length: int = None) -> str:
+def safe_string(value):
+    """Convert value to clean string, removing control chars."""
+    if value is None:
+        return ''
+    try:
+        s = str(value).strip()
+        return ''.join(ch for ch in s if ord(ch) >= 32 or ch in ('\n', '\t'))
+    except Exception:
+        return ''
+
+
+def format_size_human(size_bytes):
+    """Format bytes to human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 ** 2:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 ** 3:
+        return f"{size_bytes / (1024 ** 2):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 ** 3):.2f} GB"
+
+
+def format_duration(seconds):
     """
-    Clean string for Excel output
+    Format seconds into human-readable duration string.
 
     Args:
-        value: String to clean
-        max_length: Maximum length
+        seconds: Duration in seconds (int or float)
 
     Returns:
-        Cleaned string
+        Formatted string like '1h 23m 45s' or '2m 30s'
     """
-    if not isinstance(value, str):
-        value = str(value)
+    if seconds is None or not isinstance(seconds, (int, float)):
+        return ''
 
-    # Remove non-printable characters
-    value = ''.join(ch for ch in value if ord(ch) >= 32)
+    seconds = int(seconds)
+    if seconds <= 0:
+        return '0s'
 
-    if max_length:
-        value = value[:max_length]
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
 
-    return value
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
 
-
-def format_size(size_bytes: float) -> str:
-    """
-    Format bytes to human readable size
-
-    Args:
-        size_bytes: Size in bytes
-
-    Returns:
-        Formatted size string
-    """
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size_bytes < 1024:
-            return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.2f} PB"
+    return ' '.join(parts)
 
 
-def ensure_dir(path: Path) -> Path:
-    """
-    Ensure directory exists
-
-    Args:
-        path: Directory path
-
-    Returns:
-        Path object
-    """
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def ensure_directory(path):
+    """Create directory if it doesn't exist."""
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception as e:
+        logger.error(f"Cannot create directory {path}: {e}")
+        return False
 
 
-def get_date_from_exif(exif_data: dict) -> Optional[datetime]:
-    """
-    Extract date from EXIF data
+def resolve_filename_conflict(dest_path, strategy='rename'):
+    """Resolve filename conflict at destination."""
+    dest_path = Path(dest_path)
 
-    Args:
-        exif_data: EXIF data dictionary
+    if not dest_path.exists():
+        return dest_path
 
-    Returns:
-        datetime object or None
-    """
-    from PIL.ExifTags import TAGS
+    if strategy == 'overwrite':
+        return dest_path
 
-    for dt_tag in ('DateTimeOriginal', 'DateTime', 'DateTimeDigitized'):
-        dt = exif_data.get(dt_tag)
-        if dt:
-            try:
-                return datetime.strptime(str(dt), '%Y:%m:%d %H:%M:%S')
-            except Exception:
-                pass
+    if strategy == 'skip':
+        return None
 
-    return None
+    stem = dest_path.stem
+    suffix = dest_path.suffix
+    parent = dest_path.parent
+    counter = 1
+
+    while True:
+        new_path = parent / f"{stem}_{counter}{suffix}"
+        if not new_path.exists():
+            return new_path
+        counter += 1
+        if counter > 99999:
+            logger.error(f"Too many conflicts for {dest_path}")
+            return None
+
+
+def safe_filename(filename, max_length=255):
+    """Make filename filesystem-safe."""
+    filename = re.sub(r'[<>:"/\\|?*]', '_', str(filename))
+    return filename[:max_length]
+
+
+def get_timestamp_string():
+    """Get current timestamp as string."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S")

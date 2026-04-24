@@ -1,0 +1,138 @@
+# ============================================================
+# Photo Library Scanner - Configuration
+# ============================================================
+# Edit the paths below, then run: python main.py
+# ============================================================
+
+
+# ----------------------------------------------------------
+# SCAN SETTINGS
+# ----------------------------------------------------------
+scan:
+  # Folder to scan (all subfolders included)
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Sandhya"
+
+  recursive: true
+
+  extensions:
+    images:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - tiff
+      - tif
+      - webp
+      - heic
+      - heif
+      - raw
+      - cr2
+      - nef
+      - arw
+      - dng
+      - orf
+      - rw2
+      - pef
+
+    videos:
+      - mp4
+      - mov
+      - avi
+      - mkv
+      - 3gp
+      - m4v
+      - mpg
+      - mpeg
+
+
+# ----------------------------------------------------------
+# ORGANISATION SETTINGS
+# ----------------------------------------------------------
+organization:
+  # Where to copy/move organised files
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
+
+  # Folder naming logic:
+  #   >= day_threshold pics on a day  →  YYYYMMDD   (e.g. 20260204)
+  #   <  day_threshold pics on a day  →  YYYYMM00   (e.g. 20260200)
+  day_threshold: 60
+
+  # copy  = keep originals (safe default)
+  # move  = remove from source
+  operation: "copy"
+
+  # Use EXIF date if available, else fall back to file-modified date
+  use_exif_date: true
+
+  # Always overwrites if file already exists in destination
+  conflict_resolution: "overwrite"
+
+
+# ----------------------------------------------------------
+# OUTPUT (Excel report)
+# ----------------------------------------------------------
+output:
+  output_folder: "./output"
+  filename_prefix: "image_scan"
+
+  sheets:
+    all_images:     true
+    blurry_images:  true
+    duplicates:     true
+    quality_report: true
+    summary:        true
+
+
+# ----------------------------------------------------------
+# BLUR DETECTION
+# ----------------------------------------------------------
+blur_detection:
+  enabled: true
+
+  # Laplacian variance threshold — lower = more sensitive
+  # Recommended range: 50–150
+  threshold: 100
+
+  quality_thresholds:
+    excellent: 80
+    good:      60
+    fair:      40
+    poor:       0
+
+
+# ----------------------------------------------------------
+# DUPLICATE DETECTION
+# ----------------------------------------------------------
+duplicates:
+  enabled: true
+
+  # md5 = fast  |  sha256 = more accurate
+  hash_algorithm: "md5"
+
+  auto_select_best: true
+
+  # Criteria used to pick the "best" copy (in priority order)
+  selection_criteria:
+    - quality      # highest quality score
+    - resolution   # highest megapixels
+    - date         # newest file
+    - size         # largest file
+
+
+# ----------------------------------------------------------
+# PROCESSING
+# ----------------------------------------------------------
+processing:
+  threads: 0          # 0 = auto-detect CPU count
+  show_progress: true
+  verbose: true
+
+
+# ----------------------------------------------------------
+# LOGGING
+# ----------------------------------------------------------
+logging:
+  level: "INFO"       # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  file: "./logs/image_scanner.log"
+  console: true

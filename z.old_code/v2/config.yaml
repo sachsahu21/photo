@@ -1,0 +1,274 @@
+# Image Scanner Configuration
+
+# =========================
+# SCAN SETTINGS
+# =========================
+scan:
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Diwali pics"
+  recursive: true
+
+  # Extensions split into image + video (used by scanner.py)
+  extensions:
+    images:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - tiff
+      - tif
+      - webp
+      - heic
+      - heif
+      - raw
+      - cr2
+      - nef
+      - arw
+      - dng
+      - orf
+      - rw2
+      - pef
+
+    videos:
+      - mp4
+      - mov
+      - avi
+      - mkv
+      - 3gp
+      - m4v
+      - mpg
+      - mpeg
+
+
+# =========================
+# ORGANIZATION SETTINGS (🔥 IMPORTANT)
+# =========================
+organization:
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
+
+  # 🔥 CORE LOGIC DRIVER (USED IN YOUR organizer.py)
+  day_threshold: 60
+  # If files in a day >= 60 → folder = YYYYMMDD
+  # Else → folder = YYYYMM00 (monthly bucket)
+
+  # ⚠ NOT USED ANYMORE (kept only for backward compatibility)
+  folder_structure: "yyyymmdd"
+  # Your organizer.py ignores this now
+
+  use_exif_date: true
+
+  operation: "copy"
+  # Options:
+  # copy → keep original files (SAFE)
+  # move → remove from source
+
+  conflict_resolution: "overwrite"
+  # ⚠ NOTE:
+  # Your current code ALWAYS overwrites:
+  #   dest_path.unlink()
+  #
+  # So this config is just informational for now
+  #
+  # Options (future support):
+  # rename    → file_1.jpg
+  # skip      → ignore file
+  # overwrite → replace existing file
+
+
+# =========================
+# OUTPUT SETTINGS
+# =========================
+output:
+  output_folder: "./output"
+  filename_prefix: "image_scan"
+
+  sheets:
+    all_images: true
+    blurry_images: true
+    duplicates: true
+    summary: true
+    quality_report: true
+
+
+# =========================
+# BLUR DETECTION
+# =========================
+blur_detection:
+  enabled: true
+
+  # Lower = more sensitive to blur
+  threshold: 100
+
+  quality_thresholds:
+    excellent: 80
+    good: 60
+    fair: 40
+    poor: 0
+
+
+# =========================
+# DUPLICATE DETECTION
+# =========================
+duplicates:
+  enabled: true
+
+  hash_algorithm: "md5"  # Options: md5 (fast), sha256 (more accurate)
+
+  auto_select_best: true
+
+  selection_criteria:
+    - quality
+    - resolution
+    - date
+    - size
+
+
+# =========================
+# PROCESSING
+# =========================
+processing:
+  threads: 0  # 0 = auto CPU
+  show_progress: true
+  verbose: true
+
+
+# =========================
+# LOGGING
+# =========================
+logging:
+  level: "INFO"
+  file: "./logs/image_scanner.log"
+  console: true
+
+
+
+#   # Image extensions to scan
+# scan:
+#   folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Swapna"
+#   recursive: true
+
+#   # All supported extensions (images + videos)
+#   extensions:
+#     images:
+#       - jpg
+#       - jpeg
+#       - png
+#       - gif
+#       - bmp
+#       - tiff
+#       - tif
+#       - webp
+#       - heic
+#       - heif
+#       - raw
+#       - cr2
+#       - nef
+#       - arw
+#       - dng
+#       - orf
+#       - rw2
+#       - pef
+
+#     videos:
+#       - mp4
+#       - mov
+#       - avi
+#       - mkv
+#       - 3gp
+#       - m4v
+#       - mpg
+#       - mpeg
+
+    
+# # Blur Detection Settings
+# blur_detection:
+#   # Enable blur detection
+#   enabled: true
+
+#   # Laplacian variance threshold
+#   # Lower = more sensitive to blur
+#   # Recommended: 50-150
+#   threshold: 100
+
+#   # Quality thresholds (0-100)
+#   quality_thresholds:
+#     excellent: 80
+#     good: 60
+#     fair: 40
+#     poor: 0
+
+# # Duplicate Detection
+# duplicates:
+#   # Enable duplicate detection
+#   enabled: true
+
+#   # Hash algorithm (md5, sha256)
+#   hash_algorithm: "md5"
+
+#   # Automatic best selection
+#   auto_select_best: true
+
+#   # Selection criteria (quality, size, date, resolution)
+#   selection_criteria:
+#     - quality      # Highest quality score
+#     - resolution   # Highest megapixels
+#     - date         # Newest file
+#     - size         # Largest file
+
+# # Organization Settings
+# organization:
+#   # Base folder for organized images
+#   output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
+
+#   day_threshold: 60  
+
+#   # Folder structure: year/month, year/month/day, etc.
+#   folder_structure: "year/month"  # Options: year, year/month, year/month/day
+
+#   # Use EXIF date or file modified date
+#   use_exif_date: true
+
+#   # Copy or move files
+#   operation: "copy"  # Options: copy, move
+
+#   # Handle filename conflicts
+#   conflict_resolution: "rename"  # Options: rename, skip, overwrite
+
+# # Output Settings
+# output:
+#   # Output folder for Excel reports
+#   output_folder: "./output"
+
+#   # Excel filename prefix
+#   filename_prefix: "image_scan"
+
+#   # Generate separate sheets
+#   sheets:
+#     all_images: true
+#     blurry_images: true
+#     duplicates: true
+#     summary: true
+#     quality_report: true
+
+# # Processing Settings
+# processing:
+#   # Number of parallel threads
+#   # 0 = auto (CPU count)
+#   threads: 0
+
+#   # Show progress bar
+#   show_progress: true
+
+#   # Verbose logging
+#   verbose: true
+
+# # Logging
+# logging:
+#   # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+#   level: "INFO"
+
+#   # Log file path
+#   file: "./logs/image_scanner.log"
+
+#   # Console output
+#   console: true
