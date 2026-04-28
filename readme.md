@@ -215,6 +215,7 @@ duplicates:
     - size
 ```
 
+
 ---
 
 ## ⚙️ Configuration Reference
