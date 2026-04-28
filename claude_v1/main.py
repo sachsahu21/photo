@@ -107,7 +107,7 @@ def task_2(excel_path: str, logger):
     try:
         import openpyxl
         wb = openpyxl.load_workbook(excel_path)
-        ws = wb['All Images']
+        ws = wb['Duplicates']
 
         col = {}
         for ci, cell in enumerate(ws[1], 1):

@@ -43,12 +43,11 @@ class ImageOrganizer:
 
     def _get_dest_folder(self, record: Dict) -> Path:
         dt      = self._dt(record)
-        day_key = dt.strftime('%Y%m%d')
-        mon_key = dt.strftime('%Y%m')
+        day_key = dt.strftime('%Y%m%d')          # used for counting only
         if self.date_counts.get(day_key, 0) >= self.day_threshold:
-            name = day_key           # e.g. 20260204
+            name = dt.strftime('%Y-%m-%d')        # e.g. 2026-02-04
         else:
-            name = f"{mon_key}00"    # e.g. 20260200
+            name = dt.strftime('%Y-%m') + '-00'   # e.g. 2026-02-00
         return self.output_folder / name
 
     def _move_or_copy(self, record: Dict) -> Dict:

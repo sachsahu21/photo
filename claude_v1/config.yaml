@@ -10,7 +10,7 @@
 # ----------------------------------------------------------
 scan:
   # Folder to scan (all subfolders included)
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Swapna\\Sandhya"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\International"
 
   recursive: true
 
@@ -51,7 +51,7 @@ scan:
 # ----------------------------------------------------------
 organization:
   # Where to copy/move organised files
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\swapna"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized\\international"
 
   # Folder naming logic:
   #   >= day_threshold pics on a day  →  YYYYMMDD   (e.g. 20260204)
@@ -60,7 +60,7 @@ organization:
 
   # copy  = keep originals (safe default)
   # move  = remove from source
-  operation: "copy"
+  operation: "move"
 
   # Use EXIF date if available, else fall back to file-modified date
   use_exif_date: true
