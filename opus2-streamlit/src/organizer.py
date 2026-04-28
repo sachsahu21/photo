@@ -40,11 +40,13 @@ class ImageOrganizer:
         day_counts = defaultdict(int)
         for _, dt in dated:
             if dt:
-                day_counts[dt.strftime('%Y%m%d')] += 1
+                day_counts[dt.strftime('%Y-%m-%d')] += 1
 
         d2f = {}
         for dk, cnt in day_counts.items():
-            d2f[dk] = dk if cnt >= self.day_threshold else dk[:6] + '00'
+            # d2f[dk] = dk if cnt >= self.day_threshold else dk[:6] + '00'
+            month_key = dk[:7]  # YYYY-MM
+            d2f[dk] = dk if cnt >= self.day_threshold else f"{month_key}-00"
 
         movements = []
         desc = 'Copying' if self.operation == 'copy' else 'Moving'
@@ -79,7 +81,12 @@ class ImageOrganizer:
         if not source.exists():
             return {'filename': fn, 'source': str(source), 'destination': '', 'status': 'Error: Not found', 'folder': ''}
 
-        folder = d2f.get(dt.strftime('%Y%m%d'), dt.strftime('%Y%m') + '00') if dt else 'undated'
+        # folder = d2f.get(dt.strftime('%Y%m%d'), dt.strftime('%Y%m') + '00') if dt else 'undated'
+        folder = d2f.get(
+                        dt.strftime('%Y-%m-%d'),
+                        dt.strftime('%Y-%m') + '-00'
+                    ) if dt else 'undated'
+        
         dest_dir = self.output_folder / folder
         ensure_directory(dest_dir)
         dest = resolve_filename_conflict(dest_dir / safe_filename(source.name), self.conflict)
