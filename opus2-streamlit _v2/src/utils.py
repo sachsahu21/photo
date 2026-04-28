@@ -232,3 +232,89 @@ def get_record_defaults():
         # Auto-tagging (#12)
         'auto_tags': None, 'primary_tag': None,
     }
+
+
+def format_date_hyphen(dt):
+    """Format datetime to YYYY-MM-DD string."""
+    if isinstance(dt, datetime):
+        return dt.strftime('%Y-%m-%d')
+    return None
+
+
+def format_month_hyphen(dt):
+    """Format datetime to YYYY-MM-00 string."""
+    if isinstance(dt, datetime):
+        return dt.strftime('%Y-%m') + '-00'
+    return None
+
+
+def is_valid_date_folder(folder_name):
+    """
+    Check if folder starts with YYYY-MM-DD.
+    '2026-03-15-singapore' -> '2026-03-15'
+    '2026_singapore'       -> None
+    """
+    match = re.match(r'^(\d{4}-\d{2}-\d{2})', str(folder_name))
+    if match:
+        date_str = match.group(1)
+        try:
+            datetime.strptime(date_str, '%Y-%m-%d')
+            return date_str
+        except ValueError:
+            return None
+    return None
+
+
+def is_valid_month_folder(folder_name):
+    """
+    Check if folder starts with YYYY-MM-00.
+    '2026-03-00-misc' -> '2026-03-00'
+    """
+    match = re.match(r'^(\d{4}-\d{2}-00)', str(folder_name))
+    if match:
+        return match.group(1)
+    return None
+
+
+def determine_metadata_status(record):
+    """Determine metadata richness: Full EXIF, Partial EXIF, No EXIF, Video, Error."""
+    if record.get('error'):
+        return 'Error'
+
+    file_type = record.get('file_type', '')
+
+    if file_type == 'video':
+        has_dur = record.get('video_duration_sec') is not None
+        has_res = record.get('video_width') is not None
+        if has_dur and has_res:
+            return 'Full Video Meta'
+        elif has_dur or has_res:
+            return 'Partial Video Meta'
+        return 'No Video Meta'
+
+    if file_type == 'image':
+        if not record.get('has_exif'):
+            return 'No EXIF'
+        exif_fields = ['camera_make', 'camera_model', 'date_taken',
+                       'focal_length', 'aperture', 'iso', 'exposure_time']
+        filled = sum(1 for f in exif_fields if record.get(f))
+        if filled >= 5:
+            return 'Full EXIF'
+        elif filled >= 2:
+            return 'Partial EXIF'
+        else:
+            return 'Minimal EXIF'
+
+    return 'Unknown'
+
+
+def determine_date_source(record):
+    """Determine where date came from: EXIF, File Modified, None."""
+    if record.get('date_taken'):
+        if record.get('has_exif'):
+            return 'EXIF'
+        else:
+            return 'File Modified'
+    elif record.get('file_modified'):
+        return 'File Modified'
+    return 'None'
