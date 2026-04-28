@@ -72,14 +72,21 @@ class ImageOrganizer:
         day_counts = defaultdict(int)
         for rec, dt in dated:
             if dt:
-                day_counts[dt.strftime('%Y%m%d')] += 1
+                day_counts[dt.strftime('%Y-%m-%d')] += 1
 
         day_to_folder = {}
+        # for day_key, count in day_counts.items():
+        #     if count >= self.day_threshold:
+        #         day_to_folder[day_key] = day_key
+        #     else:
+        #         day_to_folder[day_key] = day_key[:6] + '00'
+
         for day_key, count in day_counts.items():
             if count >= self.day_threshold:
-                day_to_folder[day_key] = day_key
+                day_to_folder[day_key] = day_key  # YYYY-MM-DD
             else:
-                day_to_folder[day_key] = day_key[:6] + '00'
+                month_key = day_key[:7]  # YYYY-MM
+                day_to_folder[day_key] = f"{month_key}-00"
 
         logger.info(f"Unique days: {len(day_counts)}, "
                      f"days >= {self.day_threshold}: "
@@ -142,8 +149,10 @@ class ImageOrganizer:
             }
 
         if dt:
-            day_key = dt.strftime('%Y%m%d')
-            folder_name = day_to_folder.get(day_key, day_key[:6] + '00')
+            # day_key = dt.strftime('%Y%m%d')
+            # folder_name = day_to_folder.get(day_key, day_key[:6] + '00')
+            day_key = dt.strftime('%Y-%m-%d')
+            folder_name = day_to_folder.get(day_key, f"{day_key[:7]}-00")
         else:
             folder_name = 'undated'
 

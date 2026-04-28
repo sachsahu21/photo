@@ -1,0 +1,25 @@
+
+cd to photo folder
+
+pip install pyenv 
+
+python -m venv env 
+py -3.12 -m venv venv
+venv\Scripts\activate
+deactivate
+
+pip install -r requirements.txt
+python main.py
+3
+
+<!-- -- -->
+
+working
+photo_manage - ( fast and basic)
+claude_v1 - working perfectly (basic setup and fast to run)
+opus-streamlit - working perfectly ( advanced takes more time )
+
+
+
+
+
