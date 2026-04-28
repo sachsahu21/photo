@@ -4,5 +4,7 @@
 # ============================================================================
 """Image Scanner Package"""
 
-__version__ = "1.0.0"
-__author__ = "Your Name"
+
+__version__ = "2.1.0"
+__author__ = "Image Scanner Team"
+
