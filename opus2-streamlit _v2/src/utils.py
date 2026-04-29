@@ -1,10 +1,8 @@
-
 # ============================================================
 # FILE: src/utils.py
 # ============================================================
 """
-Utility Functions - Common helpers used across all modules.
-Enhanced with thread-safe operations and new helpers.
+Utility Functions v2.1 - Common helpers used across all modules.
 """
 
 import os
@@ -23,13 +21,11 @@ _print_lock = threading.Lock()
 
 
 def thread_safe_print(msg):
-    """Thread-safe print."""
     with _print_lock:
         print(msg)
 
 
 def calculate_file_hash(filepath, algorithm='md5'):
-    """Calculate file hash using streaming."""
     try:
         filepath = Path(filepath)
         if not filepath.exists():
@@ -51,7 +47,6 @@ def calculate_file_hash(filepath, algorithm='md5'):
 
 
 def get_file_size_mb(filepath):
-    """Get file size in MB."""
     try:
         return Path(filepath).stat().st_size / (1024 * 1024)
     except Exception:
@@ -59,7 +54,6 @@ def get_file_size_mb(filepath):
 
 
 def get_file_modification_date(filepath):
-    """Get file modification datetime."""
     try:
         return datetime.fromtimestamp(Path(filepath).stat().st_mtime)
     except Exception:
@@ -67,7 +61,6 @@ def get_file_modification_date(filepath):
 
 
 def parse_datetime_flexible(value):
-    """Parse datetime from various formats."""
     if isinstance(value, datetime):
         return value
     if not value or not isinstance(value, str):
@@ -85,7 +78,6 @@ def parse_datetime_flexible(value):
 
 
 def parse_exif_date(exif_data):
-    """Extract date from EXIF dict."""
     for field in ['DateTimeOriginal', 'DateTimeDigitized', 'DateTime']:
         val = exif_data.get(field)
         if val:
@@ -96,7 +88,6 @@ def parse_exif_date(exif_data):
 
 
 def parse_gps_coordinates(gps_info):
-    """Parse GPS from EXIF GPSInfo."""
     try:
         if not gps_info or not isinstance(gps_info, dict):
             return None, None
@@ -118,7 +109,6 @@ def parse_gps_coordinates(gps_info):
 
 
 def safe_string(value):
-    """Clean string."""
     if value is None:
         return ''
     try:
@@ -129,7 +119,6 @@ def safe_string(value):
 
 
 def format_size_human(size_bytes):
-    """Format bytes to human string."""
     if not isinstance(size_bytes, (int, float)) or size_bytes < 0:
         return '0 B'
     if size_bytes < 1024:
@@ -143,7 +132,6 @@ def format_size_human(size_bytes):
 
 
 def format_duration(seconds):
-    """Format seconds to human duration."""
     if seconds is None or not isinstance(seconds, (int, float)):
         return ''
     seconds = int(seconds)
@@ -159,83 +147,6 @@ def format_duration(seconds):
     if s > 0 or not parts:
         parts.append(f"{s}s")
     return ' '.join(parts)
-
-
-def ensure_directory(path):
-    """Create directory."""
-    try:
-        Path(path).mkdir(parents=True, exist_ok=True)
-        return True
-    except Exception as e:
-        logger.error(f"Cannot create {path}: {e}")
-        return False
-
-
-def resolve_filename_conflict(dest_path, strategy='rename'):
-    """Resolve filename conflict."""
-    dest_path = Path(dest_path)
-    if not dest_path.exists():
-        return dest_path
-    if strategy == 'overwrite':
-        return dest_path
-    if strategy == 'skip':
-        return None
-    stem, suffix, parent = dest_path.stem, dest_path.suffix, dest_path.parent
-    for i in range(1, 100000):
-        # p = parent / f"{stem}_{i}{suffix}"
-        p = parent / f"{stem}-{i}{suffix}"
-        if not p.exists():
-            return p
-    return None
-
-
-def safe_filename(filename, max_length=255):
-    """Filesystem-safe filename."""
-    return re.sub(r'[<>:"/\\|?*]', '_', str(filename))[:max_length]
-
-
-def get_timestamp_string():
-    """Current timestamp string."""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-def get_record_defaults():
-    """Return default record dict with ALL possible keys.
-    Every module should use this to ensure consistent schema."""
-    return {
-        # Core
-        'filename': '', 'folder': '', 'full_path': '',
-        'extension': '', 'file_type': '', 'size_mb': 0.0,
-        'file_modified': '', 'md5_hash': '', 'delete_flag': 'No', 'error': None,
-        # Image
-        'width': None, 'height': None, 'mode': None, 'dpi': None,
-        'date_taken': None, 'camera_make': None, 'camera_model': None,
-        'focal_length': None, 'aperture': None, 'iso': None, 'exposure_time': None,
-        'gps_lat': None, 'gps_lon': None, 'has_exif': False,
-        # Blur
-        'is_blurry': None, 'blur_score': None, 'quality_rating': 'Unknown',
-        'quality_score': None, 'quality_issues': '',
-        # Video
-        'video_duration_sec': None, 'video_duration_fmt': '',
-        'video_width': None, 'video_height': None, 'video_fps': None,
-        'video_codec': None, 'video_bitrate_kbps': None,
-        # Duplicates
-        'is_duplicate': 'No', 'duplicate_group': '', 'is_best_in_group': '',
-        'recommendation': '',
-        # Face detection (#1)
-        'face_count': 0, 'face_category': 'No People',
-        # Thumbnails (#2)
-        'thumbnail_path': None,
-        # Clustering (#7)
-        'cluster_id': None, 'cluster_label': None,
-        # Geocoding (#10)
-        'location_city': None, 'location_country': None, 'location_name': None,
-        # Auto-tagging (#12)
-        'auto_tags': None, 'primary_tag': None,
-        # NEW v2.1 - Status columns
-        'metadata_status': 'Unknown',
-        'date_source': 'None',
-    }
 
 
 def format_date_hyphen(dt):
@@ -281,7 +192,7 @@ def is_valid_month_folder(folder_name):
 
 
 def determine_metadata_status(record):
-    """Determine metadata richness: Full EXIF, Partial EXIF, No EXIF, Video, Error."""
+    """Determine metadata richness status."""
     if record.get('error'):
         return 'Error'
 
@@ -322,3 +233,74 @@ def determine_date_source(record):
     elif record.get('file_modified'):
         return 'File Modified'
     return 'None'
+
+
+def ensure_directory(path):
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception as e:
+        logger.error(f"Cannot create {path}: {e}")
+        return False
+
+
+def resolve_filename_conflict(dest_path, strategy='rename'):
+    dest_path = Path(dest_path)
+    if not dest_path.exists():
+        return dest_path
+    if strategy == 'overwrite':
+        return dest_path
+    if strategy == 'skip':
+        return None
+    stem, suffix, parent = dest_path.stem, dest_path.suffix, dest_path.parent
+    for i in range(1, 100000):
+        p = parent / f"{stem}-{i}{suffix}"
+        if not p.exists():
+            return p
+    return None
+
+
+def safe_filename(filename, max_length=255):
+    return re.sub(r'[<>:"/\\|?*]', '-', str(filename))[:max_length]
+
+
+def get_timestamp_string():
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def get_record_defaults():
+    """Return default record dict with ALL possible keys."""
+    return {
+        # Core
+        'filename': '', 'folder': '', 'full_path': '',
+        'extension': '', 'file_type': '', 'size_mb': 0.0,
+        'file_modified': '', 'md5_hash': '', 'delete_flag': 'No', 'error': None,
+        # Image
+        'width': None, 'height': None, 'mode': None, 'dpi': None,
+        'date_taken': None, 'camera_make': None, 'camera_model': None,
+        'focal_length': None, 'aperture': None, 'iso': None, 'exposure_time': None,
+        'gps_lat': None, 'gps_lon': None, 'has_exif': False,
+        # Blur
+        'is_blurry': None, 'blur_score': None, 'quality_rating': 'Unknown',
+        'quality_score': None, 'quality_issues': '',
+        # Video
+        'video_duration_sec': None, 'video_duration_fmt': '',
+        'video_width': None, 'video_height': None, 'video_fps': None,
+        'video_codec': None, 'video_bitrate_kbps': None,
+        # Duplicates
+        'is_duplicate': 'No', 'duplicate_group': '', 'is_best_in_group': '',
+        'recommendation': '',
+        # Face detection
+        'face_count': 0, 'face_category': 'No People',
+        # Thumbnails
+        'thumbnail_path': None,
+        # Clustering
+        'cluster_id': None, 'cluster_label': None,
+        # Geocoding
+        'location_city': None, 'location_country': None, 'location_name': None,
+        # Auto-tagging
+        'auto_tags': None, 'primary_tag': None,
+        # Status columns
+        'metadata_status': 'Unknown',
+        'date_source': 'None',
+    }
