@@ -32,7 +32,6 @@ MONTH_NAMES = {
     9: '09-Sep', 10: '10-Oct', 11: '11-Nov', 12: '12-Dec'
 }
 
-# Common screen resolutions for screenshot detection
 SCREEN_RESOLUTIONS = {
     (1080, 1920), (1080, 2340), (1080, 2400), (1080, 2520),
     (1170, 2532), (1179, 2556), (1284, 2778), (1290, 2796),
@@ -103,15 +102,16 @@ class ImageOrganizer:
     # ── Existing Folder Scanning ──
 
     def _scan_existing_folders(self):
-        """Scan output dir for existing YYYY-MM-DD* folders (recursive for year-month)."""
+        """Scan output dir for existing YYYY-MM-DD* folders."""
         cache = {'daily': {}, 'monthly': {}}
         try:
             if not self.output_folder.exists():
                 return cache
 
-            # Use rglob for nested structures
-            search_items = self.output_folder.rglob('*') if self.folder_structure != 'flat' \
-                else self.output_folder.iterdir()
+            if self.folder_structure != 'flat':
+                search_items = self.output_folder.rglob('*')
+            else:
+                search_items = self.output_folder.iterdir()
 
             for item in search_items:
                 if not item.is_dir():
@@ -180,10 +180,21 @@ class ImageOrganizer:
         if not locations:
             return ''
         most_common = Counter(locations).most_common(1)[0]
-        # Only use if at least 30% of records have this location
         if most_common[1] >= len(records) * 0.3:
             return most_common[0]
         return ''
+
+    def _update_folder_name_with_count(self, existing_name, new_count):
+        """
+        Update the pic count in an existing folder name.
+        2026-03-15-85pic-singapore -> 2026-03-15-120pic-singapore
+        """
+        match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
+        if match:
+            prefix = match.group(1)
+            suffix = match.group(3)
+            return f"{prefix}-{new_count}pic{suffix}"
+        return f"{existing_name}-{new_count}pic"
 
     # ── Path Builder ──
 
@@ -202,7 +213,6 @@ class ImageOrganizer:
         elif self.folder_structure == 'year-month-day' and dt:
             year = str(dt.year)
             month = MONTH_NAMES.get(dt.month, f"{dt.month:02d}")
-            # For year-month-day, replace date prefix with just day
             day_match = re.match(r'^\d{4}-\d{2}-(\d{2})(.*)', folder_name)
             if day_match:
                 day_name = day_match.group(1) + day_match.group(2)
@@ -210,10 +220,8 @@ class ImageOrganizer:
             else:
                 dest = self.output_folder / year / month / folder_name
         else:
-            # flat
             dest = self.output_folder / folder_name
 
-        # Video subfolder
         if self.video_subfolder and file_type == 'video':
             dest = dest / 'videos'
 
@@ -222,40 +230,20 @@ class ImageOrganizer:
     # ── Resolve Existing ──
 
     def _find_existing_folder(self, date_key):
-        """
-        Check if an existing folder matches this date.
-        Returns existing folder name or None.
-        """
+        """Check if an existing folder matches this date."""
         if not self.reuse_existing or not self._existing_cache:
             return None
 
-        # Check daily
         existing = self._existing_cache['daily'].get(date_key)
         if existing:
             return existing
 
-        # Check monthly
         if date_key.endswith('-00'):
             existing = self._existing_cache['monthly'].get(date_key)
             if existing:
                 return existing
 
         return None
-
-    def _update_folder_name_with_count(self, existing_name, new_count):
-        """
-        Update the pic count in an existing folder name.
-        2026-03-15-85pic-singapore → 2026-03-15-120pic-singapore
-        """
-        match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
-        match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
-
-        if match:
-            prefix = match.group(1)
-            suffix = match.group(3)
-            return f"{prefix}-{new_count}pic{suffix}"
-        # No pic count found, append it
-        return f"{existing_name}-{new_count}pic"
 
     # ── Date Extraction ──
 
@@ -285,7 +273,6 @@ class ImageOrganizer:
         if self.reuse_existing:
             self._existing_cache = self._scan_existing_folders()
 
-        # Separate deleted, screenshots, normal
         screenshots = []
         normal = []
         skipped = 0
@@ -307,16 +294,16 @@ class ImageOrganizer:
 
         movements = []
 
-        # ── Process Screenshots ──
+        # Process Screenshots
         if screenshots:
             print(f"  📱 Screenshots: {len(screenshots)}")
             movements.extend(self._organize_screenshots(screenshots))
 
-        # ── Process Normal Photos/Videos ──
+        # Process Normal Photos/Videos
         if normal:
             movements.extend(self._organize_normal(normal))
 
-        # ── Rename folders with final counts ──
+        # Rename folders with final counts
         self._rename_folders_with_counts(movements)
 
         self._report(movements)
@@ -331,7 +318,6 @@ class ImageOrganizer:
         """Organize screenshot files into screenshot folders."""
         movements = []
 
-        # Group by month
         month_groups = defaultdict(list)
         for rec in screenshots:
             dt = self._date(rec)
@@ -376,10 +362,8 @@ class ImageOrganizer:
         """Organize normal photos and videos by date with pic counts."""
         movements = []
 
-        # Extract dates
         dated = [(r, self._date(r)) for r in records]
 
-        # Count files per day
         day_counts = defaultdict(int)
         day_records = defaultdict(list)
         undated = []
@@ -392,7 +376,6 @@ class ImageOrganizer:
             else:
                 undated.append((rec, None))
 
-        # Determine which days get daily vs monthly folders
         daily_days = set()
         monthly_buckets = defaultdict(list)
 
@@ -400,11 +383,10 @@ class ImageOrganizer:
             if count >= self.day_threshold:
                 daily_days.add(day_key)
             else:
-                # Group into monthly bucket
-                month_key = day_key[:6]  # YYYYMM
+                month_key = day_key[:6]
                 monthly_buckets[month_key].extend(day_records[day_key])
 
-        # ── Process daily folders ──
+        # Process daily folders
         daily_count = len(daily_days)
         if daily_count:
             logger.info(f"Daily folders: {daily_count} days with >= {self.day_threshold} files")
@@ -415,13 +397,10 @@ class ImageOrganizer:
             date_str = sample_dt.strftime('%Y-%m-%d')
             count = len(group)
 
-            # Get location hint
             location = self._get_location_hint([r for r, _ in group])
 
-            # Check existing folder
             existing = self._find_existing_folder(date_str)
             if existing:
-                # Reuse existing folder path but will rename later with count
                 folder_name = existing['name']
                 logger.info(f"Reusing existing folder: {folder_name}")
             else:
@@ -433,7 +412,7 @@ class ImageOrganizer:
                 dest_dir = self._build_dest_path(folder_name, dt, file_type)
                 movements.append(self._move_file(rec, dest_dir, folder_name))
 
-        # ── Process monthly buckets ──
+        # Process monthly buckets
         for month_key in sorted(monthly_buckets):
             group = monthly_buckets[month_key]
             sample_dt = group[0][1]
@@ -455,7 +434,7 @@ class ImageOrganizer:
                 dest_dir = self._build_dest_path(folder_name, dt, file_type)
                 movements.append(self._move_file(rec, dest_dir, folder_name))
 
-        # ── Process undated ──
+        # Process undated
         if undated:
             count = len(undated)
             folder_name = f"undated-{count}pic"
@@ -475,11 +454,7 @@ class ImageOrganizer:
         """
         After all files are copied/moved, rename folders to reflect
         actual file counts (in case some were skipped/errored).
-
-        2026-03-15-85pic-singapore → 2026-03-15-82pic-singapore
-        (if 3 files had errors)
         """
-        # Count successful files per destination folder
         folder_counts = defaultdict(int)
         folder_paths = {}
 
@@ -487,36 +462,30 @@ class ImageOrganizer:
             if m['status'] == 'Success' and m.get('destination'):
                 dest = Path(m['destination'])
                 parent = dest.parent
-                # Skip videos subfolder — count in parent
                 if parent.name == 'videos':
                     parent = parent.parent
                 folder_counts[str(parent)] += 1
                 folder_paths[str(parent)] = parent
 
-        # Rename each folder
         for folder_str, count in folder_counts.items():
             folder = Path(folder_str)
             if not folder.exists():
                 continue
 
             old_name = folder.name
-            # Check if name already has pic count
-            # match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, old_name)
-            match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
+            match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, old_name)
             if match:
                 prefix = match.group(1)
                 old_count = int(match.group(2))
                 suffix = match.group(3)
 
-                # Only rename if count changed
                 if old_count != count:
                     new_name = f"{prefix}-{count}pic{suffix}"
                     new_path = folder.parent / new_name
                     if not new_path.exists():
                         try:
                             folder.rename(new_path)
-                            logger.info(f"Renamed: {old_name} → {new_name}")
-                            # Update movements
+                            logger.info(f"Renamed: {old_name} -> {new_name}")
                             for m in movements:
                                 if m.get('destination') and folder_str in m['destination']:
                                     m['destination'] = m['destination'].replace(
@@ -584,7 +553,6 @@ class ImageOrganizer:
                 f.write(f"Success: {s}\nErrors: {e}\nSkipped: {sk}\n"
                         f"Total: {len(movements)}\n\n")
 
-                # Folder distribution
                 f.write(f"{'='*60}\nFOLDER DISTRIBUTION\n{'='*60}\n")
                 fc = defaultdict(int)
                 for m in movements:
@@ -593,7 +561,6 @@ class ImageOrganizer:
                 for fld in sorted(fc):
                     f.write(f"  {fld}: {fc[fld]} files\n")
 
-                # Category breakdown
                 cats = defaultdict(int)
                 for m in movements:
                     if m['status'] == 'Success':
@@ -610,15 +577,10 @@ class ImageOrganizer:
                     for cat, cnt in sorted(cats.items(), key=lambda x: -x[1]):
                         f.write(f"  {cat}: {cnt} files\n")
 
-                # Errors
                 err_list = [m for m in movements if 'Error' in m['status']]
                 if err_list:
                     f.write(f"\n{'='*60}\nERRORS\n{'='*60}\n")
-                    for m in err_list[:50]:  # Limit to 50
+                    for m in err_list[:50]:
                         f.write(f"  {m['filename']}: {m['status']}\n")
                     if len(err_list) > 50:
-                        f.write(f"  ... and {len(err_list) - 50} more errors\n")
-
-            logger.info(f"Report saved: {rp}")
-        except Exception as e:
-            logger.error(f"Report error: {e}")
+                        f.write(f"  .
