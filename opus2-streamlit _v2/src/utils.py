@@ -182,7 +182,8 @@ def resolve_filename_conflict(dest_path, strategy='rename'):
         return None
     stem, suffix, parent = dest_path.stem, dest_path.suffix, dest_path.parent
     for i in range(1, 100000):
-        p = parent / f"{stem}_{i}{suffix}"
+        # p = parent / f"{stem}_{i}{suffix}"
+        p = parent / f"{stem}-{i}{suffix}"
         if not p.exists():
             return p
     return None
