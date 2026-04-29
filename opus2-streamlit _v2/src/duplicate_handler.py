@@ -1,8 +1,7 @@
-
 # ============================================================
 # FILE: src/duplicate_handler.py
 # ============================================================
-"""Duplicate Handler - exact or similar match."""
+"""Duplicate Handler v2.1"""
 
 import logging
 from collections import defaultdict
@@ -134,7 +133,7 @@ class DuplicateHandler:
         groups = self.find_duplicates(records)
         total = 0
         for gid, indices in groups.items():
-            label = f"DUP_{gid:04d}"
+            label = f"DUP-{gid:04d}"
             best = self.select_best(records, indices)
             for idx in indices:
                 records[idx]['is_duplicate'] = 'YES'
