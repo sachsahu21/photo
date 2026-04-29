@@ -231,6 +231,9 @@ def get_record_defaults():
         'location_city': None, 'location_country': None, 'location_name': None,
         # Auto-tagging (#12)
         'auto_tags': None, 'primary_tag': None,
+        # NEW v2.1 - Status columns
+        'metadata_status': 'Unknown',
+        'date_source': 'None',
     }
 
 
