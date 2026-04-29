@@ -1,23 +1,16 @@
-
-
 # ============================================================
 # FILE: src/config_manager.py
 # ============================================================
-"""
-Configuration Manager - YAML config with dot-notation access.
-Enhanced with new feature sections.
-"""
+"""Configuration Manager v2.1"""
 
 import yaml
 import logging
 from pathlib import Path
-from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
-    """Manages application configuration."""
 
     def __init__(self, config_path='config.yaml'):
         self.config_path = self._resolve_path(config_path)
@@ -67,11 +60,17 @@ class ConfigManager:
                 'selection_criteria': ['quality', 'resolution', 'date', 'size'],
             },
             'organization': {
-                'output_folder': './organized_images', 'day_threshold': 60,
-                'use_exif_date': True, 'operation': 'copy', 'conflict_resolution': 'rename',
+                'output_folder': './organized_images',
+                'day_threshold': 60,
+                'use_exif_date': True,
+                'operation': 'copy',
+                'conflict_resolution': 'rename',
+                'reuse_existing_folders': True,
+                'video_subfolder': True,
             },
             'output': {
-                'output_folder': './reports', 'filename_prefix': 'image_scan',
+                'output_folder': './reports',
+                'filename_prefix': 'image-scan',
                 'sheets': {
                     'all_images': True, 'blurry_images': True, 'duplicates': True,
                     'summary': True, 'quality_report': True, 'analytics': True,
@@ -79,8 +78,13 @@ class ConfigManager:
                 },
             },
             'processing': {
-                'threads': 0, 'show_progress': True, 'verbose': False,
-                'checkpoint_enabled': True, 'checkpoint_interval': 100,
+                'threads': 0,
+                'show_progress': True,
+                'verbose': False,
+                'checkpoint_enabled': True,
+                'checkpoint_interval': 100,
+                'fast_mode': False,
+                'skip_video_hash': True,
             },
             'face_detection': {'enabled': False, 'method': 'opencv'},
             'thumbnails': {
@@ -91,24 +95,19 @@ class ConfigManager:
                 'enabled': False, 'method': 'color_histogram',
                 'n_clusters': 10, 'min_cluster_size': 3,
             },
-            'geocoding': {
-                'enabled': False, 'method': 'offline',
-            },
+            'geocoding': {'enabled': False, 'method': 'offline'},
             'auto_tagging': {
-                'enabled': False, 'model': 'mobilenet', 'top_k': 5, 'confidence_threshold': 0.3,
+                'enabled': False, 'model': 'mobilenet',
+                'top_k': 5, 'confidence_threshold': 0.3,
             },
-            'comparison': {
-                'enabled': True, 'output_folder': './comparisons',
-            },
+            'comparison': {'enabled': True, 'output_folder': './comparisons'},
             'analytics': {'enabled': True},
             'cloud': {
                 'enabled': False, 'provider': 'none',
                 'bucket': '', 'prefix': '', 'credentials_path': '',
             },
-            'streamlit': {
-                'enabled': True, 'port': 8501, 'theme': 'light',
-            },
-            'logging': {'level': 'INFO', 'file': './logs/image_scanner.log', 'console': True},
+            'streamlit': {'enabled': True, 'port': 8501},
+            'logging': {'level': 'INFO', 'file': './logs/image-scanner.log', 'console': True},
         }
 
     def get(self, key, default=None):
@@ -151,5 +150,3 @@ class ConfigManager:
             for e in errors:
                 print(f"    - {e}")
         return len(errors) == 0
-
-
