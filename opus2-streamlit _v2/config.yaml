@@ -1,642 +1,137 @@
 # ============================================================
-# IMAGE SCANNER v2.1 - CONFIGURATION
-# ============================================================
-# All options documented with available values
+# IMAGE SCANNER v2.2 - CONFIGURATION
 # ============================================================
 
-
-# ============================================================
-# SCAN SETTINGS
-# ============================================================
 scan:
-  # REQUIRED: Path to folder containing images/videos
-  # Use double backslash on Windows or forward slash
-  # Examples:
-  #   "C:\\Users\\John\\Pictures"
-  #   "C:/Users/John/Pictures"
-  #   "/home/john/Pictures"
-  #   "./sample_images"
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\google"
-
-  # Scan subfolders inside the main folder?
-  # Options: true | false
-  #   true  = scan all subfolders recursively
-  #   false = scan only the top-level folder
+  folder_path: "C:\\Users\\YourUser\\Pictures"
   recursive: true
-
-  # File extensions to scan
-  # Add or remove extensions as needed
-  # Case insensitive (jpg = JPG = Jpg)
   extensions:
-    images:
-      - jpg
-      - jpeg
-      - png
-      - gif
-      - bmp
-      - tiff
-      - tif
-      - webp
-      - heic       # iPhone photos (needs pillow-heif)
-      - heif       # iPhone photos (needs pillow-heif)
-      - raw
-      - cr2        # Canon RAW
-      - nef        # Nikon RAW
-      - arw        # Sony RAW
-      - dng        # Adobe RAW
-    videos:
-      - mp4
-      - mov        # iPhone/Mac videos
-      - avi
-      - mkv
-      - 3gp        # Old phone videos
-      - m4v
-      - mpg
-      - mpeg
-      - wmv        # Windows Media
-      - flv        # Flash video
-      - webm
-      - mts        # AVCHD camcorder
+    images: [jpg, jpeg, png, gif, bmp, tiff, tif, webp, heic, heif, raw, cr2, nef, arw, dng]
+    videos: [mp4, mov, avi, mkv, 3gp, m4v, mpg, mpeg, wmv, flv, webm, mts]
 
-
-# ============================================================
-# BLUR DETECTION
-# ============================================================
 blur_detection:
-  # Enable blur detection for images?
-  # Options: true | false
-  #   true  = calculate blur score for every image (slower)
-  #   false = skip blur detection (faster)
-  # Note: Disabled automatically when fast_mode is true
   enabled: true
-
-  # Blur threshold - images below this score are "blurry"
-  # Options: any positive number
-  #   50   = very strict (many images marked blurry)
-  #   100  = balanced (recommended)
-  #   200  = lenient (only very blurry images caught)
-  #   500  = very lenient
-  # Higher = fewer images marked as blurry
   threshold: 100
 
-
-# ============================================================
-# DUPLICATE DETECTION
-# ============================================================
 duplicates:
-  # Enable duplicate detection?
-  # Options: true | false
-  #   true  = calculate hash and find duplicates
-  #   false = skip entirely (fastest, no hash calculation)
   enabled: true
-
-  # Hash algorithm for file comparison
-  # Options: "md5" | "sha256"
-  #   "md5"    = faster, sufficient for duplicate detection (recommended)
-  #   "sha256" = slower, cryptographically stronger (overkill for photos)
   hash_algorithm: "md5"
-
-  # How to match duplicates
-  # Options: "exact" | "similar"
-  #   "exact"   = files must be byte-for-byte identical (recommended)
-  #   "similar"  = perceptual hash, catches resized/recompressed copies
-  #               (slower, may have false positives)
   match_mode: "exact"
-
-  # Similarity threshold (only used when match_mode is "similar")
-  # Options: 1 to 100 (percentage)
-  #   80  = loose matching (more matches, more false positives)
-  #   90  = balanced (recommended for similar mode)
-  #   95  = strict matching (fewer matches, fewer false positives)
-  #   100 = exact match only
   similarity_threshold: 90
+  selection_criteria: [quality, resolution, date, size]
 
-  # Criteria to pick the "best" file in a duplicate group
-  # The best file is marked KEEP, others marked DELETE
-  # Options (list, in priority order):
-  #   "quality"    = higher quality score wins
-  #   "resolution" = higher pixel count wins
-  #   "date"       = newer date wins
-  #   "size"       = larger file size wins
-  # Order matters: first criterion is most important
-  selection_criteria:
-    - quality
-    - resolution
-    - date
-    - size
-
-
-# ============================================================
-# FILE ORGANIZATION
-# ============================================================
 organization:
-  # REQUIRED: Output folder for organized files
-  # A new folder structure will be created here
-  # Examples:
-  #   "C:\\Users\\John\\Pictures\\Organized"
-  #   "./organized_images"
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
-
-  # Day threshold for folder granularity
-  # Options: any positive integer
-  #   If a date has >= this many files, it gets its own YYYY-MM-DD folder
-  #   If fewer, files go into monthly YYYY-MM-00 bucket
-  # Examples:
-  #   1   = every date gets its own folder (many folders)
-  #   30  = need 30+ photos on same day for daily folder
-  #   60  = need 60+ photos on same day for daily folder (recommended)
-  #   999 = almost everything goes to monthly buckets
+  output_folder: "C:\\Users\\YourUser\\Pictures\\Organized"
   day_threshold: 60
-
-  # Use EXIF date or file modified date?
-  # Options: true | false
-  #   true  = prefer EXIF DateTaken (accurate for camera photos)
-  #   false = always use file modified date (less accurate but always available)
   use_exif_date: true
-
-  # File operation
-  # Options: "copy" | "move"
-  #   "copy" = copy files to organized folder (safe, originals untouched)
-  #   "move" = move files (saves disk space, originals removed)
-  # WARNING: "move" is irreversible! Use "copy" first to verify results.
   operation: "copy"
-
-  # What to do when destination file already exists
-  # Options: "rename" | "skip" | "overwrite"
-  #   "rename"    = add -1, -2, -3 suffix (photo-1.jpg, photo-2.jpg)
-  #   "skip"      = skip the file, don't copy/move
-  #   "overwrite"  = replace existing file (DANGEROUS)
-  conflict_resolution: "overwrite"
-
-  # Reuse existing dated folders?
-  # Options: true | false
-  #   true  = if "2026-03-15-singapore" exists, add matching photos there
-  #           only matches folders starting with YYYY-MM-DD pattern
-  #           ignores folders like "2026_singapore" or "vacation"
-  #   false = always create new YYYY-MM-DD folders
+  conflict_resolution: "rename"
   reuse_existing_folders: true
-
-  # Create subfolder for videos inside each date folder?
-  # Options: true | false
-  #   true  = videos go to "2026-03-15/videos/VID_001.mp4"
-  #   false = videos stay alongside images "2026-03-15/VID_001.mp4"
   video_subfolder: true
 
+  # Folder structure
+  # Options: "flat" | "year-month" | "year-month-day"
+  #
+  # "flat":
+  #   Organized/
+  #   ├── 2026-03-15-85pic-singapore/
+  #   ├── 2026-03-00-12pic/
+  #   └── screenshots-45pic/
+  #
+  # "year-month":
+  #   Organized/
+  #   ├── 2026/
+  #   │   ├── 03-Mar/
+  #   │   │   ├── 2026-03-15-85pic-singapore/
+  #   │   │   ├── 2026-03-00-12pic/
+  #   │   │   └── 2026-03-screenshots-20pic/
+  #   │   └── 04-Apr/
+  #   └── 2025/
+  #
+  # "year-month-day":
+  #   Organized/
+  #   ├── 2026/
+  #   │   ├── 03-Mar/
+  #   │   │   ├── 15-85pic-singapore/
+  #   │   │   └── 00-12pic/
+  #   │   └── 04-Apr/
+  #   └── 2025/
+  folder_structure: "flat"
 
-# ============================================================
-# OUTPUT / EXCEL REPORT
-# ============================================================
+  # Separate screenshots into their own folder?
+  # Options: true | false
+  #   true  = auto-detect screenshots by screen resolution + no EXIF
+  #           also detects by filename keywords (screenshot, capture, snip)
+  #           puts them in: screenshots-XXpic/ or YYYY-MM-screenshots-XXpic/
+  #   false = treat screenshots like normal photos
+  separate_screenshots: true
+
 output:
-  # Folder where Excel reports are saved
-  # Options: any valid path
-  #   "./reports"
-  #   "C:\\Users\\John\\Desktop\\Reports"
   output_folder: "./reports"
-
-  # Prefix for Excel filename
-  # Final name: {prefix}-{folder-name}-{timestamp}.xlsx
-  # Example: image-scan-Pictures-20260315-143022.xlsx
   filename_prefix: "image-scan"
-
-  # Which sheets to include in Excel
-  # Options per sheet: true | false
-  # Disable sheets you don't need to reduce file size
   sheets:
-    all_images: true        # Every file with all columns
-    blurry_images: true     # Only blurry files
-    duplicates: true        # Only duplicate files grouped
-    summary: true           # Overview statistics
-    quality_report: true    # Quality distribution and metadata stats
-    analytics: true         # Storage analytics
-    clusters: true          # Image clusters (only if clustering enabled)
+    all_images: true
+    blurry_images: true
+    duplicates: true
+    summary: true
+    quality_report: true
+    analytics: true
+    clusters: true
 
-
-# ============================================================
-# PROCESSING / PERFORMANCE
-# ============================================================
 processing:
-  # Number of parallel threads for scanning
-  # Options:
-  #   0  = auto-detect (uses CPU core count, max 8)
-  #   1  = sequential (single thread, safest)
-  #   2  = 2 threads
-  #   4  = 4 threads (recommended for most machines)
-  #   8  = 8 threads (for powerful machines)
-  # Note: More threads = faster but more memory usage
-  # Note: Parallel mode not used when fast_mode is true
   threads: 4
-
-  # Show progress bar during scanning?
-  # Options: true | false
   show_progress: true
-
-  # Verbose logging?
-  # Options: true | false
-  #   true  = extra debug messages in log file
-  #   false = normal logging
   verbose: false
-
-  # Enable checkpoint for scan resume?
-  # Options: true | false
-  #   true  = saves progress every N files, can resume if interrupted
-  #   false = no checkpointing
   checkpoint_enabled: true
-
-  # Save checkpoint every N files
-  # Options: any positive integer
-  #   50   = save often (safer, slightly slower)
-  #   100  = balanced (recommended)
-  #   500  = save less often (faster, more data lost on crash)
   checkpoint_interval: 100
-
-  # FAST MODE - skip all heavy processing
-  # Options: true | false
-  #   true  = disables: blur detection, face detection, auto tagging, thumbnails
-  #           keeps: metadata extraction, hash calculation, duplicates
-  #           ~3-5x faster than full scan
-  #   false = all enabled features run normally
   fast_mode: false
-
-  # Skip MD5 hash calculation for video files?
-  # Options: true | false
-  #   true  = videos won't have hash (can't detect video duplicates)
-  #           MUCH faster for large video files (2GB+ videos take minutes to hash)
-  #   false = hash every video file (slow but catches video duplicates)
   skip_video_hash: true
 
-
-# ============================================================
-# FACE DETECTION
-# ============================================================
 face_detection:
-  # Enable face detection in images?
-  # Options: true | false
-  #   true  = detect faces, count them, categorize (Portrait/Group)
-  #   false = skip face detection
-  # Note: Disabled automatically when fast_mode is true
-  # Note: No extra install needed (uses OpenCV built-in Haar cascades)
   enabled: false
-
-  # Detection method
-  # Options: "opencv"
-  #   "opencv" = Haar cascade classifier (fast, good enough)
-  # Future: "dlib" (more accurate but needs dlib installed)
   method: "opencv"
 
-
-# ============================================================
-# THUMBNAILS
-# ============================================================
 thumbnails:
-  # Generate thumbnail previews?
-  # Options: true | false
-  #   true  = create small JPEG previews for each image/video
-  #   false = skip thumbnail generation
-  # Note: Disabled automatically when fast_mode is true
-  # Thumbnails are cached - regeneration skipped if already exists
   enabled: true
-
-  # Thumbnail dimensions [width, height] in pixels
-  # Options: any [width, height] pair
-  #   [100, 75]   = small (fast, less disk)
-  #   [150, 100]  = medium (recommended)
-  #   [300, 200]  = large (slower, more disk)
   size: [150, 100]
-
-  # Where to store thumbnails
-  # Options: any valid path
   output_folder: "./thumbnails"
-
-  # Embed thumbnails directly in Excel?
-  # Options: true | false
-  #   true  = Excel file will be much larger but has inline previews
-  #   false = thumbnails stored as separate files only
-  # WARNING: true can make Excel very large for 1000+ images
   embed_in_excel: false
 
-
-# ============================================================
-# IMAGE CLUSTERING
-# ============================================================
 clustering:
-  # Group visually similar images by color?
-  # Options: true | false
-  #   true  = cluster images using color histograms + KMeans
-  #   false = skip clustering
-  # Requires: pip install scikit-learn
-  # Falls back to simple hue-based grouping if scikit-learn not installed
   enabled: false
-
-  # Clustering method
-  # Options: "color_histogram"
-  #   "color_histogram" = HSV color histogram features + KMeans
   method: "color_histogram"
-
-  # Number of clusters to create
-  # Options: any positive integer
-  #   5   = few large groups
-  #   10  = balanced (recommended)
-  #   20  = many small groups
-  #   50  = very fine-grained grouping
-  # Actual clusters may be fewer if not enough images
   n_clusters: 10
-
-  # Minimum images needed to form a cluster
-  # Options: any positive integer
-  #   2  = even pairs count as clusters
-  #   3  = need at least 3 similar images (recommended)
-  #   5  = only larger groups
   min_cluster_size: 3
 
-
-# ============================================================
-# GEOCODING (GPS to Location Name)
-# ============================================================
 geocoding:
-  # Reverse geocode GPS coordinates to city/country?
-  # Options: true | false
-  #   true  = convert GPS lat/lon to city, country names
-  #   false = skip geocoding (GPS coordinates still extracted)
-  # Requires: pip install reverse_geocoder
-  # Note: Uses OFFLINE database - no internet needed, no privacy concerns
-  # Note: Only works for images that have GPS in EXIF
   enabled: false
-
-  # Geocoding method
-  # Options: "offline"
-  #   "offline" = uses reverse_geocoder library (local database)
-  # Future: "online" (Google Maps API, needs API key)
   method: "offline"
 
-
-# ============================================================
-# AUTO TAGGING
-# ============================================================
 auto_tagging:
-  # Automatically tag images based on visual properties?
-  # Options: true | false
-  #   true  = analyze colors, brightness, resolution to generate tags
-  #   false = skip auto tagging
-  # Note: Disabled automatically when fast_mode is true
-  # Note: Current implementation uses heuristics (no ML model needed)
-  # Tags include: bright, dark, colorful, monotone, panoramic,
-  #               high-resolution, green-nature, sky-blue, warm-tones, etc.
   enabled: false
-
-  # Tagging model
-  # Options: "mobilenet"
-  #   "mobilenet" = currently uses simple heuristics
-  # Future: actual MobileNet ONNX model for object detection
   model: "mobilenet"
-
-  # Maximum number of tags per image
-  # Options: 1 to 20
-  #   3  = only top 3 tags
-  #   5  = balanced (recommended)
-  #   10 = many tags per image
   top_k: 5
-
-  # Minimum confidence to assign a tag
-  # Options: 0.0 to 1.0
-  #   0.1 = assign almost everything (noisy)
-  #   0.3 = balanced (recommended)
-  #   0.7 = only very confident tags
-  # Note: Currently not used by heuristic tagger
   confidence_threshold: 0.3
 
-
-# ============================================================
-# DUPLICATE COMPARISON PAGES
-# ============================================================
 comparison:
-  # Generate HTML comparison pages for duplicate groups?
-  # Options: true | false
-  #   true  = create side-by-side HTML pages for each duplicate group
-  #   false = skip comparison generation
-  # Output: one HTML file per duplicate group
   enabled: true
-
-  # Where to save comparison HTML files
-  # Options: any valid path
   output_folder: "./comparisons"
 
-
-# ============================================================
-# STORAGE ANALYTICS
-# ============================================================
 analytics:
-  # Calculate storage analytics?
-  # Options: true | false
-  #   true  = analyze size by format, year, folder, camera
-  #   false = skip analytics (slightly faster Excel generation)
   enabled: true
 
-
-# ============================================================
-# CLOUD STORAGE (Experimental)
-# ============================================================
 cloud:
-  # Enable cloud storage scanning?
-  # Options: true | false
-  # Note: Downloads files to temp folder for scanning
   enabled: false
-
-  # Cloud provider
-  # Options: "none" | "s3" | "gcs"
-  #   "none" = disabled
-  #   "s3"   = Amazon S3 (requires: pip install boto3)
-  #   "gcs"  = Google Cloud Storage (requires: pip install google-cloud-storage)
   provider: "none"
-
-  # Bucket name
-  # Options: your bucket name string
-  #   "my-photos-bucket"
   bucket: ""
-
-  # Prefix/folder inside bucket
-  # Options: folder path inside bucket
-  #   "photos/2024/"
-  #   "" = scan entire bucket
   prefix: ""
-
-  # Path to credentials file
-  # Options:
-  #   "" = use default credentials (AWS CLI config or GOOGLE_APPLICATION_CREDENTIALS)
-  #   "path/to/credentials.json" = explicit credentials file
   credentials_path: ""
 
-
-# ============================================================
-# STREAMLIT WEB DASHBOARD
-# ============================================================
 streamlit:
-  # Enable Streamlit dashboard option?
-  # Options: true | false
-  # Requires: pip install streamlit
   enabled: true
-
-  # Port for Streamlit server
-  # Options: any available port number
-  #   8501 = default Streamlit port
-  #   8080 = alternative
   port: 8501
 
-
-# ============================================================
-# LOGGING
-# ============================================================
 logging:
-  # Log level
-  # Options: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"
-  #   "DEBUG"    = everything (very verbose, large log files)
-  #   "INFO"     = normal operations + warnings + errors (recommended)
-  #   "WARNING"  = only warnings and errors
-  #   "ERROR"    = only errors
-  #   "CRITICAL" = only fatal errors
   level: "INFO"
-
-  # Log file path
-  # Options: any valid file path
-  # Directory is auto-created if it doesn't exist
   file: "./logs/image-scanner.log"
-
-  # Also print logs to console?
-  # Options: true | false
-  #   true  = logs appear in terminal AND log file
-  #   false = logs only in file (cleaner terminal output)
   console: true
-
-
-# ============================================================
-# QUICK PRESETS (copy one of these blocks to override above)
-# ============================================================
-#
-# PRESET: FAST SCAN (metadata + duplicates only)
-# -----------------------------------------------
-# processing:
-#   fast_mode: true
-#   skip_video_hash: true
-#   threads: 4
-# blur_detection:
-#   enabled: false
-# duplicates:
-#   enabled: true
-# face_detection:
-#   enabled: false
-# thumbnails:
-#   enabled: false
-# clustering:
-#   enabled: false
-# geocoding:
-#   enabled: false
-# auto_tagging:
-#   enabled: false
-#
-#
-# PRESET: STANDARD (recommended)
-# -----------------------------------------------
-# processing:
-#   fast_mode: false
-#   skip_video_hash: true
-#   threads: 4
-# blur_detection:
-#   enabled: true
-# duplicates:
-#   enabled: true
-# face_detection:
-#   enabled: false
-# thumbnails:
-#   enabled: true
-# clustering:
-#   enabled: false
-# geocoding:
-#   enabled: false
-# auto_tagging:
-#   enabled: false
-#
-#
-# PRESET: FULL ANALYSIS (slowest, maximum detail)
-# -----------------------------------------------
-# processing:
-#   fast_mode: false
-#   skip_video_hash: false
-#   threads: 4
-# blur_detection:
-#   enabled: true
-#   threshold: 100
-# duplicates:
-#   enabled: true
-#   match_mode: "similar"
-#   similarity_threshold: 90
-# face_detection:
-#   enabled: true
-# thumbnails:
-#   enabled: true
-# clustering:
-#   enabled: true
-#   n_clusters: 10
-# geocoding:
-#   enabled: true
-# auto_tagging:
-#   enabled: true
-#
-#
-# PRESET: ORGANIZE ONLY (skip analysis, just sort files)
-# -----------------------------------------------
-# processing:
-#   fast_mode: true
-#   skip_video_hash: true
-# blur_detection:
-#   enabled: false
-# duplicates:
-#   enabled: false
-# face_detection:
-#   enabled: false
-# thumbnails:
-#   enabled: false
-# clustering:
-#   enabled: false
-# geocoding:
-#   enabled: false
-# auto_tagging:
-#   enabled: false
-# output:
-#   sheets:
-#     all_images: true
-#     blurry_images: false
-#     duplicates: false
-#     summary: true
-#     quality_report: false
-#     analytics: false
-#     clusters: false
-
-
-
-# ┌─────────────────────────────────────────────────────────────┐
-# │                CONFIG QUICK REFERENCE                        │
-# ├─────────────────────┬───────────────────────────────────────┤
-# │ SETTING             │ OPTIONS                               │
-# ├─────────────────────┼───────────────────────────────────────┤
-# │ operation           │ "copy" | "move"                       │
-# │ conflict_resolution │ "rename" | "skip" | "overwrite"       │
-# │ hash_algorithm      │ "md5" | "sha256"                     │
-# │ match_mode          │ "exact" | "similar"                   │
-# │ method (face)       │ "opencv"                              │
-# │ method (geo)        │ "offline"                             │
-# │ method (cluster)    │ "color_histogram"                     │
-# │ provider (cloud)    │ "none" | "s3" | "gcs"                │
-# │ level (logging)     │ "DEBUG"|"INFO"|"WARNING"|"ERROR"      │
-# │ fast_mode           │ true | false                          │
-# │ skip_video_hash     │ true | false                          │
-# │ reuse_existing      │ true | false                          │
-# │ video_subfolder     │ true | false                          │
-# │ recursive           │ true | false                          │
-# │ embed_in_excel      │ true | false                          │
-# │ threads             │ 0=auto | 1=single | 2-8              │
-# │ threshold (blur)    │ 50=strict | 100=balanced | 200=lenient│
-# │ similarity          │ 80=loose | 90=balanced | 95=strict    │
-# │ n_clusters          │ 5=few | 10=balanced | 20=many         │
-# │ day_threshold       │ 1=daily | 60=balanced | 999=monthly   │
-# │ top_k (tags)        │ 3=few | 5=balanced | 10=many          │
-# │ thumbnail size      │ [100,75] | [150,100] | [300,200]      │
-# └─────────────────────┴───────────────────────────────────────┘
