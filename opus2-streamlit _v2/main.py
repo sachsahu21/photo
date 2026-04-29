@@ -1,7 +1,7 @@
 # ============================================================
 # FILE: main.py
 # ============================================================
-"""Image Scanner v2.1 - Main Entry Point"""
+"""Image Scanner v2.2 - Main Entry Point"""
 
 import sys
 import logging
@@ -58,7 +58,7 @@ def load_backup(fn=BACKUP_FILE):
 def print_banner():
     print("""
     ╔═══════════════════════════════════════════════════════╗
-    ║      IMAGE SCANNER - Professional Edition v2.1        ║
+    ║      IMAGE SCANNER - Professional Edition v2.2        ║
     ║   Metadata · Blur · Duplicates · Faces · Tags · AI    ║
     ╚═══════════════════════════════════════════════════════╝""")
 
@@ -311,6 +311,9 @@ def task_3(excel_path, config, logger):
             'Type': 'file_type', 'Format': 'extension',
             'Size (MB)': 'size_mb', 'Quality %': 'quality_score',
             'Metadata Status': 'metadata_status', 'Date Source': 'date_source',
+            'Width (px)': 'width', 'Height (px)': 'height',
+            'Has EXIF': 'has_exif',
+            'Location': 'location_name', 'Country': 'location_country',
         }
 
         records = []
@@ -323,20 +326,28 @@ def task_3(excel_path, config, logger):
             records.append(rec)
 
         print(f"  Loaded {len(records)} records")
+
+        fs = config.get('organization.folder_structure', 'flat')
+        print(f"  ✓ Folder structure: {fs}")
         if config.get('organization.reuse_existing_folders'):
             print("  ✓ Reuse existing folders: ON")
         if config.get('organization.video_subfolder'):
             print("  ✓ Video subfolder: ON")
+        if config.get('organization.separate_screenshots'):
+            print("  ✓ Separate screenshots: ON")
 
         org = ImageOrganizer(config.to_dict())
         mvs = org.organize(records)
 
         s = sum(1 for m in mvs if m['status'] == 'Success')
         e = sum(1 for m in mvs if 'Error' in m['status'])
+        ss = sum(1 for m in mvs if 'screenshot' in m.get('folder', '').lower())
 
         box("TASK 3 DONE", [
             ("Organized", s),
+            ("Screenshots", ss),
             ("Errors", e),
+            ("Structure", fs),
             ("Output", config.get('organization.output_folder', '')),
         ])
 
@@ -380,7 +391,7 @@ def main():
         print_banner()
         config = ConfigManager()
         logger = setup_logging(config)
-        logger.info("Image Scanner v2.1 started")
+        logger.info("Image Scanner v2.2 started")
         print(f"  Config: {config.config_path}")
         print(f"  Scan: {config.get('scan.folder_path')}")
 
@@ -400,10 +411,14 @@ def main():
         if features:
             print(f"  Features: {', '.join(features)}")
 
+        fs = config.get('organization.folder_structure', 'flat')
+        print(f"  Organization: {fs} structure")
         if config.get('organization.reuse_existing_folders'):
             print("  Organization: reuse existing folders ON")
         if config.get('organization.video_subfolder'):
             print("  Organization: video subfolder ON")
+        if config.get('organization.separate_screenshots'):
+            print("  Organization: separate screenshots ON")
 
         if not config.validate():
             if input("  Continue? (yes/no): ").strip().lower() != 'yes':
