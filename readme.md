@@ -18,7 +18,7 @@
 
 ```
 ╔══════════════════════════════════════════════╗
-║   Photo Library Scanner  v2.0               ║
+║   Photo Library Scanner  v2.1 (recommended) ║
 ║   Scan · Detect · Organise                  ║
 ╚══════════════════════════════════════════════╝
 ```
@@ -37,51 +37,63 @@
 | 🔗 **Duplicate Detection** | MD5 content hashing — finds identical files across different folders |
 | 🏆 **Best-Copy Selection** | Auto-picks the highest-quality copy from each duplicate group |
 | 📁 **Smart Organisation** | `YYYYMMDD` folder if ≥ 60 pics that day, `YYYYMM00` bucket otherwise |
-| 📊 **Excel Report** | 5-sheet workbook with filters, colour coding, and delete flags |
+| 📊 **Excel Report** | 5-7 sheet workbook with filters, colour coding, and delete flags (depends on config) |
 | 🗑️ **Safe Deletion** | Mark files in Excel → script deletes only what you approved |
 
 ---
 
-## 🗂️ Project Structure
+## 🗂️ Codebase Layout (variants)
+
+This repo contains multiple “generations” of the same photo scanner pipeline. Pick the folder you want to run:
 
 ```
-photo_scanner/
-│
-├── main.py                  ← Entry point — interactive task menu
-├── config.yaml              ← All settings (paths, thresholds, extensions)
-│
-└── src/
-    ├── __init__.py          ← Package exports
-    ├── config_manager.py    ← Loads & validates config.yaml
-    ├── scanner.py           ← Walks folders, extracts EXIF metadata
-    ├── blur_detector.py     ← Laplacian variance blur scoring
-    ├── duplicate_handler.py ← MD5 grouping, best-copy selection
-    ├── organizer.py         ← Smart YYYYMMDD / YYYYMM00 folder logic
-    ├── excel_writer.py      ← Generates 5-sheet formatted Excel report
-    ├── utils.py             ← Hash, GPS, date, string helpers
-    └── main_utils.py        ← Logging setup & pickle backup helpers
-
-output/                      ← Excel reports saved here  (auto-created)
-logs/                        ← scanner.log saved here    (auto-created)
+photo/
+├── opus2-streamlit/          (v2.0)  CLI + Streamlit dashboard
+│   ├── main.py
+│   ├── config.yaml
+│   ├── requirements.txt
+│   ├── src/
+│   └── web/streamlit_app.py
+├── opus2-streamlit _v2/     (v2.1)  Recommended CLI + Streamlit + comparison pages
+│   ├── main.py
+│   ├── config.yaml
+│   ├── requirements.txt
+│   ├── src/
+│   └── web/streamlit_app.py
+├── pic_manage/               (v1.0.0) Earlier/scaled-down scanner
+│   ├── main.py
+│   ├── config.yaml
+│   ├── requirements.txt
+│   └── src/
+├── claude_v1/                Prototype
+└── z.old_code/              Archived experiments (v1/v2/v3)
 ```
+
+### What the pipeline does (shared across variants)
+Scan a folder tree → extract EXIF/metadata → blur score → duplicate grouping + best-copy selection → write an Excel report → optionally delete marked files → organize (copy/move) into date-based folders (`YYYYMMDD` / `YYYYMM00`).
+
+### Outputs you can expect
+- Excel reports in the configured `output_folder` (defaults to `./reports`)
+- Logs in the configured `logging.file`
+- Backups for resuming mid-scan (pickle file, see “Task 1”)
+- Duplicate comparison HTML pages when enabled (v2.1: `./comparisons/DUP_*.html`)
 
 ---
 
 ## ⚡ Quick Start
 
-### 1 — Clone & set up a virtual environment
+### 1 — Choose a variant & set up a virtual environment
 
 ```bash
-git clone https://github.com/yourname/photo-scanner.git
-cd photo-scanner
+# Recommended (latest) variant:
+cd "opus2-streamlit _v2"
 
 python -m venv venv
-
-# Windows
 venv\Scripts\activate
 
-# macOS / Linux
-source venv/bin/activate
+# Older alternatives:
+# cd "opus2-streamlit"
+# cd "pic_manage"
 ```
 
 ### 2 — Install dependencies
@@ -117,7 +129,9 @@ You'll see the interactive menu:
 │  2. Delete Marked Files (from Excel)         │
 │  3. Organise Images by Date                  │
 │  4. Full Workflow  (1 → 2 → 3)               │
-│  5. Exit                                     │
+│  5. Launch Web Dashboard (Streamlit)        │
+│  6. Generate Comparison Pages               │
+│  0. Exit                                     │
 └──────────────────────────────────────────────┘
 ```
 
@@ -134,7 +148,7 @@ You'll see the interactive menu:
 ```
 
 ### Task 1 — Scan & Extract Metadata
-Walks the entire folder tree, extracts all metadata, scores blur, detects duplicates, and produces a full Excel workbook. A `records_backup.pkl` is saved so you can resume if anything interrupts.
+Walks the entire folder tree, extracts all metadata, scores blur, detects duplicates, and produces a full Excel workbook. A `records-backup.pkl` is saved so you can resume if anything interrupts. If you enable comparison generation in `config.yaml`, it can also produce `./comparisons/DUP_*.html`.
 
 ### Task 2 — Delete Marked Files
 Opens the Excel report, reads every row where `DELETE? (Yes/No)` = `Yes`, and permanently deletes those files from disk.
@@ -162,6 +176,8 @@ Date source priority: **EXIF date taken → file modified date → today**.
 | **Blurry Images** | Only blurry files, sorted worst-first, with editable delete flags |
 | **Duplicates** | Grouped by MD5 hash — best copy auto-selected, others flagged |
 | **Quality Report** | Score distribution: Excellent / Good / Fair / Poor |
+| **Analytics** | Optional scan analytics (quality/format/camera breakdowns) |
+| **Clusters** | Optional clustering/groups (e.g., color-histogram clusters) |
 
 ### Colour coding in All Images
 
@@ -255,11 +271,21 @@ output:
 ## 📦 Requirements
 
 ```
-Pillow>=9.0.0
-openpyxl>=3.1.5
-opencv-python>=4.5.0
-PyYAML>=6.0
-tqdm>=4.62.0
+Pillow
+openpyxl
+PyYAML
+tqdm
+numpy
+opencv-python (or opencv-python-headless)
+python-dateutil
+
+# v2.x extras (enable in config.yaml)
+pillow-heif (HEIC/HEIF support)
+streamlit (web dashboard)
+reverse_geocoder (geocoding)
+scikit-learn (clustering)
+Jinja2 (comparison page templates)
+pymediainfo (richer video metadata; requires MediaInfo installed)
 ```
 
 Install all at once:
@@ -280,7 +306,7 @@ pip install -r requirements.txt
 | `blur_detector.py` | Reads image with OpenCV, computes Laplacian variance, returns rating |
 | `duplicate_handler.py` | Builds MD5 hash map, groups duplicates, scores and selects best copy |
 | `organizer.py` | Pre-counts images per day, applies threshold logic, copies/moves files |
-| `excel_writer.py` | Writes 5-sheet formatted workbook with colours, filters, and freeze panes |
+| `excel_writer.py` | Writes a multi-sheet workbook (5-7 tabs) with colours, filters, and freeze panes |
 | `utils.py` | `file_hash`, `get_gps`, `get_date_from_exif`, `safe_string` |
 | `main_utils.py` | `setup_logging`, `save_backup`, `load_backup` |
 
@@ -302,7 +328,7 @@ pip install -r requirements.txt
 - Only one process can write to an `.xlsx` file at a time
 
 **Task 1 interrupted mid-scan**
-- A `records_backup.pkl` is saved automatically after scanning
+- A `records-backup.pkl` is saved automatically after scanning
 - Use menu option `1b` to skip re-scanning and write the Excel from the backup
 
 **Out of memory on very large libraries**
@@ -313,8 +339,9 @@ pip install -r requirements.txt
 
 ## 🗺️ Roadmap
 
-- [ ] Web UI (Flask / FastAPI)
-- [ ] Face detection & grouping
+- [x] Streamlit dashboard (run `python -m streamlit run web/streamlit_app.py`)
+- [x] Comparison pages generator (HTML in `./comparisons`)
+- [ ] Face detection & grouping (if you want it fully integrated/enabled)
 - [ ] Google Drive / OneDrive upload
 - [ ] Machine-learning quality assessment
 - [ ] Thumbnail preview column in Excel
