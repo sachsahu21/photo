@@ -248,6 +248,8 @@ class ImageOrganizer:
         2026-03-15-85pic-singapore → 2026-03-15-120pic-singapore
         """
         match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
+        match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
+
         if match:
             prefix = match.group(1)
             suffix = match.group(3)
@@ -499,7 +501,8 @@ class ImageOrganizer:
 
             old_name = folder.name
             # Check if name already has pic count
-            match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, old_name)
+            # match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, old_name)
+            match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
             if match:
                 prefix = match.group(1)
                 old_count = int(match.group(2))
