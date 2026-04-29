@@ -1,7 +1,7 @@
 # ============================================================
 # FILE: src/config_manager.py
 # ============================================================
-"""Configuration Manager v2.1"""
+"""Configuration Manager v2.2"""
 
 import yaml
 import logging
@@ -67,6 +67,8 @@ class ConfigManager:
                 'conflict_resolution': 'rename',
                 'reuse_existing_folders': True,
                 'video_subfolder': True,
+                'folder_structure': 'flat',
+                'separate_screenshots': True,
             },
             'output': {
                 'output_folder': './reports',
@@ -143,6 +145,12 @@ class ConfigManager:
             errors.append(f"scan.folder_path not found: {sp}")
         if not self.get('organization.output_folder'):
             errors.append("organization.output_folder required")
+
+        # Validate folder_structure
+        fs = self.get('organization.folder_structure', 'flat')
+        if fs not in ('flat', 'year-month', 'year-month-day'):
+            errors.append(f"Invalid folder_structure: {fs}. Use: flat, year-month, year-month-day")
+
         for e in errors:
             logger.error(f"Config: {e}")
         if errors:
