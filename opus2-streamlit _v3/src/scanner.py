@@ -2,565 +2,597 @@
 # FILE: src/scanner.py
 # ============================================================
 """
-Image & Video Scanner v2.1
-- Single image load (pass to blur, face, thumb, tagger)
-- fast_mode support
-- skip_video_hash support
-- metadata_status and date_source columns
+Image Organizer v2.2
+Folder format: YYYY-MM-DD-XXpic or YYYY-MM-DD-XXpic-text
+Configurable: flat, year-month, year-month-day
+Screenshot separation, Video subfolder, Reuse existing folders
 """
 
-import os
+import re
+import shutil
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from collections import defaultdict, Counter
 
 from tqdm import tqdm
-
-from .blur_detector import BlurDetector
-from .video_metadata import VideoMetadataExtractor
 from .utils import (
-    calculate_file_hash, safe_string, parse_exif_date,
-    parse_gps_coordinates, get_file_modification_date,
-    format_duration, get_record_defaults,
-    determine_metadata_status, determine_date_source
+    parse_datetime_flexible, resolve_filename_conflict,
+    ensure_directory, safe_filename, is_valid_date_folder,
+    is_valid_month_folder
 )
 
 logger = logging.getLogger(__name__)
 
-try:
-    from PIL import Image as PILImage
-    from PIL.ExifTags import TAGS
-    PIL_OK = True
-except ImportError:
-    PIL_OK = False
+MONTH_NAMES = {
+    1: '01-Jan',
+    2: '02-Feb',
+    3: '03-Mar',
+    4: '04-Apr',
+    5: '05-May',
+    6: '06-Jun',
+    7: '07-Jul',
+    8: '08-Aug',
+    9: '09-Sep',
+    10: '10-Oct',
+    11: '11-Nov',
+    12: '12-Dec'
+}
 
-try:
-    import cv2
-    CV2_OK = True
-except ImportError:
-    CV2_OK = False
+SCREEN_RESOLUTIONS = {
+    (1080, 1920),
+    (1080, 2340),
+    (1080, 2400),
+    (1080, 2520),
+    (1170, 2532),
+    (1179, 2556),
+    (1284, 2778),
+    (1290, 2796),
+    (1440, 2560),
+    (1440, 3040),
+    (1440, 3200),
+    (750, 1334),
+    (828, 1792),
+    (1125, 2436),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+    (2048, 2732),
+    (1668, 2388),
+    (1620, 2160),
+    (1536, 2048),
+    (2160, 1620),
+    (2388, 1668),
+    (2732, 2048),
+    (2048, 1536),
+}
+
+RE_PIC_COUNT = re.compile(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;)
+RE_DAY_EXTRACT = re.compile(r'^\d{4}-\d{2}-(\d{2})(.*)')
+RE_LOCATION_CLEAN = re.compile(r'[^a-z0-9]+')
+RE_WHATSAPP = re.compile(r'^(?:IMG|VID|AUD|PTT|STK)-\d{8}-WA\d+', re.IGNORECASE)
+RE_SCREENSHOT_KW = re.compile(r'screenshot|screen_shot|screen-shot|capture|snip|screen\sshot', re.IGNORECASE)
 
 
-class ImageScanner:
+class ImageOrganizer:
 
     def __init__(self, config):
-        self.config = config
+        org = config.get('organization', {})
+        self.output_folder = Path(org.get('output_folder', './organized_images'))
+        self.day_threshold = int(org.get('day_threshold', 60))
+        self.use_exif = org.get('use_exif_date', True)
+        self.operation = str(org.get('operation', 'copy')).lower()
+        self.conflict = str(org.get('conflict_resolution', 'rename')).lower()
+        self.reuse_existing = org.get('reuse_existing_folders', True)
+        self.video_subfolder = org.get('video_subfolder', True)
+        self.show_progress = config.get('processing', {}).get('show_progress', True)
+        self.folder_structure = org.get('folder_structure', 'flat')
+        self.separate_screenshots = org.get('separate_screenshots', True)
 
-        # Core - Blur
-        blur_cfg = config.get('blur_detection', {})
-        self.blur_enabled = blur_cfg.get('enabled', True)
-        self.blur_detector = BlurDetector(threshold=blur_cfg.get('threshold', 100))
+        ensure_directory(self.output_folder)
+        self._existing_cache = None
 
-        # Core - Video
-        self.video_extractor = VideoMetadataExtractor()
+    def _is_screenshot(self, rec):
+        if not self.separate_screenshots:
+            return False
 
-        # Core - Duplicates
-        dup_cfg = config.get('duplicates', {})
-        self.hash_algorithm = dup_cfg.get('hash_algorithm', 'md5')
-        self.duplicates_enabled = dup_cfg.get('enabled', True)
+        fn = str(rec.get('filename') or rec.get('Filename') or '')
+        if RE_SCREENSHOT_KW.search(fn):
+            return True
 
-        # Extensions
-        scan_cfg = config.get('scan', {})
-        ext_cfg = scan_cfg.get('extensions', {})
-        if isinstance(ext_cfg, dict):
-            self.image_exts = self._norm(ext_cfg.get('images', []))
-            self.video_exts = self._norm(ext_cfg.get('videos', []))
+        w = rec.get('width') or rec.get('Width (px)')
+        h = rec.get('height') or rec.get('Height (px)')
+        has_exif = rec.get('has_exif') or rec.get('Has EXIF')
+        meta_status = str(rec.get('metadata_status', ''))
+
+        if w and h:
+            try:
+                iw = int(w)
+                ih = int(h)
+                if (iw, ih) in SCREEN_RESOLUTIONS or (ih, iw) in SCREEN_RESOLUTIONS:
+                    if not has_exif or meta_status in ('No EXIF', 'Minimal EXIF'):
+                        return True
+            except (ValueError, TypeError):
+                pass
+
+        return False
+
+    def _scan_existing_folders(self):
+        cache = {'daily': {}, 'monthly': {}}
+        try:
+            if not self.output_folder.exists():
+                return cache
+
+            if self.folder_structure == 'flat':
+                items = self.output_folder.iterdir()
+            else:
+                items = self.output_folder.rglob('*')
+
+            for item in items:
+                if not item.is_dir():
+                    continue
+                name = item.name
+
+                date_prefix = is_valid_date_folder(name)
+                if date_prefix:
+                    if date_prefix not in cache['daily']:
+                        cache['daily'][date_prefix] = {
+                            'name': name,
+                            'rel_path': str(item.relative_to(self.output_folder)),
+                            'full_path': str(item),
+                        }
+                    continue
+
+                month_prefix = is_valid_month_folder(name)
+                if month_prefix:
+                    if month_prefix not in cache['monthly']:
+                        cache['monthly'][month_prefix] = {
+                            'name': name,
+                            'rel_path': str(item.relative_to(self.output_folder)),
+                            'full_path': str(item),
+                        }
+
+            total = len(cache['daily']) + len(cache['monthly'])
+            if total > 0:
+                logger.info(
+                    'Existing folders: %d daily, %d monthly',
+                    len(cache['daily']),
+                    len(cache['monthly'])
+                )
+        except Exception as e:
+            logger.warning('Scan existing folders error: %s', e)
+        return cache
+
+    def _build_folder_name(self, date_key, count, location_hint=''):
+        pic_part = str(count) + 'pic'
+        if location_hint:
+            clean = RE_LOCATION_CLEAN.sub('-', location_hint.lower()).strip('-')
+            if clean and len(clean) > 1:
+                return date_key + '-' + pic_part + '-' + clean
+        return date_key + '-' + pic_part
+
+    def _get_location_hint(self, records):
+        locations = []
+        for rec in records:
+            for key in ['location_city', 'location_name', 'Location']:
+                loc = rec.get(key)
+                if loc and str(loc).strip():
+                    locations.append(str(loc).strip().lower())
+                    break
+        if not locations:
+            return ''
+        most_common = Counter(locations).most_common(1)[0]
+        if most_common[1] >= len(records) * 0.3:
+            return most_common[0]
+        return ''
+
+    def _update_folder_name_count(self, existing_name, new_count):
+        m = RE_PIC_COUNT.match(existing_name)
+        if m:
+            return m.group(1) + '-' + str(new_count) + 'pic' + m.group(3)
+        return existing_name + '-' + str(new_count) + 'pic'
+
+    def _build_dest_path(self, folder_name, dt, file_type):
+        if self.folder_structure == 'year-month' and dt:
+            year = str(dt.year)
+            month = MONTH_NAMES.get(dt.month, str(dt.month).zfill(2))
+            dest = self.output_folder / year / month / folder_name
+
+        elif self.folder_structure == 'year-month-day' and dt:
+            year = str(dt.year)
+            month = MONTH_NAMES.get(dt.month, str(dt.month).zfill(2))
+            m = RE_DAY_EXTRACT.match(folder_name)
+            if m:
+                day_name = m.group(1) + m.group(2)
+                dest = self.output_folder / year / month / day_name
+            else:
+                dest = self.output_folder / year / month / folder_name
+
         else:
-            self.image_exts = self._norm([
-                'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
-                'heic', 'raw', 'cr2', 'nef', 'arw', 'dng'])
-            self.video_exts = self._norm([
-                'mp4', 'mov', 'avi', 'mkv', '3gp', 'm4v', 'mpg',
-                'mpeg', 'wmv', 'flv', 'webm', 'mts'])
-        self.all_exts = self.image_exts | self.video_exts
-        self.recursive = scan_cfg.get('recursive', True)
+            dest = self.output_folder / folder_name
 
-        # Processing
-        proc_cfg = config.get('processing', {})
-        self.show_progress = proc_cfg.get('show_progress', True)
-        self.parallel_workers = proc_cfg.get('threads', 0)
-        self.checkpoint_enabled = proc_cfg.get('checkpoint_enabled', False)
-        self.checkpoint_interval = proc_cfg.get('checkpoint_interval', 100)
-        self.fast_mode = proc_cfg.get('fast_mode', False)
-        self.skip_video_hash = proc_cfg.get('skip_video_hash', True)
+        if self.video_subfolder and file_type == 'video':
+            dest = dest / 'videos'
 
-        # Feature flags (disabled in fast_mode)
-        if self.fast_mode:
-            self.face_enabled = False
-            self.thumb_enabled = False
-            self.tag_enabled = False
-            self.blur_enabled = False
-            self.geo_enabled = config.get('geocoding', {}).get('enabled', False)
-            logger.info("Fast mode ON: blur, face, tags, thumbnails disabled")
-        else:
-            self.face_enabled = config.get('face_detection', {}).get('enabled', False)
-            self.thumb_enabled = config.get('thumbnails', {}).get('enabled', False)
-            self.tag_enabled = config.get('auto_tagging', {}).get('enabled', False)
-            self.geo_enabled = config.get('geocoding', {}).get('enabled', False)
+        return dest
 
-        # Lazy-init feature modules
-        self._face_detector = None
-        self._thumb_generator = None
-        self._auto_tagger = None
-        self._geocoder = None
+    def _find_existing_folder(self, date_key):
+        if not self.reuse_existing or not self._existing_cache:
+            return None
 
-    def _norm(self, exts):
-        if not exts:
-            return set()
-        return {f".{e.lower().lstrip('.')}" for e in exts if e}
+        existing = self._existing_cache['daily'].get(date_key)
+        if existing:
+            return existing
 
-    def _init_features(self):
-        """Lazy-initialize optional feature modules."""
-        if self.face_enabled and self._face_detector is None:
-            try:
-                from .face_detector import FaceDetector
-                self._face_detector = FaceDetector(
-                    method=self.config.get('face_detection', {}).get('method', 'opencv'))
-                logger.info("Face detection enabled")
-            except Exception as e:
-                logger.warning(f"Face detection init failed: {e}")
-                self.face_enabled = False
+        if date_key.endswith('-00'):
+            existing = self._existing_cache['monthly'].get(date_key)
+            if existing:
+                return existing
 
-        if self.thumb_enabled and self._thumb_generator is None:
-            try:
-                from .thumbnail_generator import ThumbnailGenerator
-                thumb_cfg = self.config.get('thumbnails', {})
-                self._thumb_generator = ThumbnailGenerator(
-                    output_folder=thumb_cfg.get('output_folder', './thumbnails'),
-                    size=thumb_cfg.get('size', [150, 100]))
-                logger.info("Thumbnail generation enabled")
-            except Exception as e:
-                logger.warning(f"Thumbnail init failed: {e}")
-                self.thumb_enabled = False
+        return None
 
-        if self.tag_enabled and self._auto_tagger is None:
-            try:
-                from .auto_tagger import AutoTagger
-                tag_cfg = self.config.get('auto_tagging', {})
-                self._auto_tagger = AutoTagger(
-                    model=tag_cfg.get('model', 'mobilenet'),
-                    top_k=tag_cfg.get('top_k', 5),
-                    confidence_threshold=tag_cfg.get('confidence_threshold', 0.3))
-                logger.info("Auto-tagging enabled")
-            except Exception as e:
-                logger.warning(f"Auto-tagger init failed: {e}")
-                self.tag_enabled = False
+    def _date(self, r):
+        if self.use_exif:
+            for k in ['date_taken', 'Date Taken']:
+                v = r.get(k)
+                if v:
+                    dt = parse_datetime_flexible(v)
+                    if dt:
+                        return dt
+        for k in ['file_modified', 'File Modified']:
+            v = r.get(k)
+            if v:
+                dt = parse_datetime_flexible(v)
+                if dt:
+                    return dt
+        return None
 
-        if self.geo_enabled and self._geocoder is None:
-            try:
-                from .geocoder import Geocoder
-                self._geocoder = Geocoder(
-                    method=self.config.get('geocoding', {}).get('method', 'offline'))
-                logger.info("Geocoding enabled")
-            except Exception as e:
-                logger.warning(f"Geocoder init failed: {e}")
-                self.geo_enabled = False
-
-    def scan(self, folder_path):
-        """Scan folder with all enhancements."""
-        folder = Path(folder_path).expanduser().resolve()
-        if not folder.exists():
-            raise FileNotFoundError(f"Not found: {folder}")
-        if not folder.is_dir():
-            raise NotADirectoryError(f"Not a directory: {folder}")
-
-        logger.info(f"Scanning: {folder}")
-        if self.fast_mode:
-            logger.info("FAST MODE: blur, face, tags, thumbnails disabled")
-
-        self._init_features()
-
-        files = self._find_files(folder)
-        if not files:
-            logger.warning("No files found")
-            self._debug_folder(folder)
+    def organize(self, records):
+        if not records:
             return []
 
-        logger.info(f"Found {len(files)} files")
+        if self.reuse_existing:
+            self._existing_cache = self._scan_existing_folders()
 
-        # Checkpoint
-        checkpoint = None
-        if self.checkpoint_enabled:
-            from .checkpoint_manager import CheckpointManager
-            checkpoint = CheckpointManager(interval=self.checkpoint_interval)
-            if checkpoint.load():
-                before = len(files)
-                files = [f for f in files if not checkpoint.is_processed(str(f))]
-                logger.info(f"Resuming: {len(files)} remaining (skipped {before - len(files)})")
+        screenshots = []
+        normal = []
+        skipped = 0
 
-        # Process (parallel or sequential)
-        if self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
-            records = self._scan_parallel(files, checkpoint)
-        else:
-            records = self._scan_sequential(files, checkpoint)
+        for r in records:
+            delete_val = str(
+                r.get('delete_flag', '') or r.get('DELETE? (Yes/No)', '') or ''
+            ).strip().lower()
+            if delete_val in ('yes', 'true', '1'):
+                skipped += 1
+                continue
 
-        # Batch geocoding
-        if self.geo_enabled and self._geocoder:
-            self._batch_geocode(records)
+            if self._is_screenshot(r):
+                screenshots.append(r)
+            else:
+                normal.append(r)
 
-        # Set metadata_status and date_source for all records
-        for rec in records:
-            rec['metadata_status'] = determine_metadata_status(rec)
-            rec['date_source'] = determine_date_source(rec)
+        logger.info(
+            'Organizing: %d normal, %d screenshots, %d skipped',
+            len(normal), len(screenshots), skipped
+        )
 
-        if checkpoint:
-            checkpoint.save()
-            checkpoint.clear()
+        movements = []
 
-        logger.info(f"Scan complete: {len(records)} records")
-        return records
+        if screenshots:
+            print('  Screenshots: ' + str(len(screenshots)))
+            movements.extend(self._organize_screenshots(screenshots))
 
-    def _scan_sequential(self, files, checkpoint):
-        records = []
-        it = tqdm(files, desc="Scanning", unit="file", disable=not self.show_progress)
-        for fp in it:
+        if normal:
+            movements.extend(self._organize_normal(normal))
+
+        self._rename_folders_with_counts(movements)
+        self._report(movements)
+
+        success = sum(1 for m in movements if m['status'] == 'Success')
+        errors = sum(1 for m in movements if 'Error' in m['status'])
+        logger.info('Organization done: %d success, %d errors', success, errors)
+
+        return movements
+
+    def _organize_screenshots(self, screenshots):
+        movements = []
+
+        month_groups = defaultdict(list)
+        for rec in screenshots:
+            dt = self._date(rec)
+            if dt:
+                mk = dt.strftime('%Y-%m')
+                month_groups[mk].append((rec, dt))
+            else:
+                month_groups['undated'].append((rec, None))
+
+        for month_key, group in month_groups.items():
+            count = len(group)
+            if month_key == 'undated':
+                folder_name = 'screenshots-' + str(count) + 'pic'
+                sample_dt = None
+            else:
+                folder_name = month_key + '-screenshots-' + str(count) + 'pic'
+                sample_dt = group[0][1]
+
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
+                file_type = rec.get('file_type') or rec.get('Type') or ''
+
+                if self.folder_structure == 'year-month' and sample_dt:
+                    year = str(sample_dt.year)
+                    month = MONTH_NAMES.get(sample_dt.month, str(sample_dt.month).zfill(2))
+                    dest_dir = self.output_folder / year / month / folder_name
+                elif self.folder_structure == 'year-month-day' and sample_dt:
+                    year = str(sample_dt.year)
+                    month = MONTH_NAMES.get(sample_dt.month, str(sample_dt.month).zfill(2))
+                    dest_dir = self.output_folder / year / month / folder_name
+                else:
+                    dest_dir = self.output_folder / folder_name
+
+                if self.video_subfolder and file_type == 'video':
+                    dest_dir = dest_dir / 'videos'
+
+                movements.append(self._move_file(rec, dest_dir, folder_name))
+
+        return movements
+
+    def _organize_normal(self, records):
+        movements = []
+
+        dated = [(r, self._date(r)) for r in records]
+
+        day_counts = defaultdict(int)
+        day_records = defaultdict(list)
+        undated = []
+
+        for rec, dt in dated:
+            if dt:
+                day_key = dt.strftime('%Y%m%d')
+                day_counts[day_key] += 1
+                day_records[day_key].append((rec, dt))
+            else:
+                undated.append((rec, None))
+
+        daily_days = set()
+        monthly_buckets = defaultdict(list)
+
+        for day_key, count in day_counts.items():
+            if count >= self.day_threshold:
+                daily_days.add(day_key)
+            else:
+                month_key = day_key[:6]
+                monthly_buckets[month_key].extend(day_records[day_key])
+
+        if daily_days:
+            logger.info(
+                'Daily folders: %d days with >= %d files',
+                len(daily_days), self.day_threshold
+            )
+
+        # Daily folders
+        for day_key in sorted(daily_days):
+            group = day_records[day_key]
+            sample_dt = group[0][1]
+            date_str = sample_dt.strftime('%Y-%m-%d')
+            count = len(group)
+
+            location = self._get_location_hint([r for r, _ in group])
+
+            existing = self._find_existing_folder(date_str)
+            if existing:
+                folder_name = existing['name']
+                logger.info('Reusing existing folder: %s', folder_name)
+            else:
+                folder_name = self._build_folder_name(date_str, count, location)
+
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
+                file_type = rec.get('file_type') or rec.get('Type') or ''
+                dest_dir = self._build_dest_path(folder_name, dt, file_type)
+                movements.append(self._move_file(rec, dest_dir, folder_name))
+
+        # Monthly buckets
+        for month_key in sorted(monthly_buckets):
+            group = monthly_buckets[month_key]
+            sample_dt = group[0][1]
+            date_str = sample_dt.strftime('%Y-%m') + '-00'
+            count = len(group)
+
+            location = self._get_location_hint([r for r, _ in group])
+
+            existing = self._find_existing_folder(date_str)
+            if existing:
+                folder_name = existing['name']
+                logger.info('Reusing existing folder: %s', folder_name)
+            else:
+                folder_name = self._build_folder_name(date_str, count, location)
+
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
+                file_type = rec.get('file_type') or rec.get('Type') or ''
+                dest_dir = self._build_dest_path(folder_name, dt, file_type)
+                movements.append(self._move_file(rec, dest_dir, folder_name))
+
+        # Undated
+        if undated:
+            count = len(undated)
+            folder_name = 'undated-' + str(count) + 'pic'
+            for rec, dt in tqdm(undated, desc='  ' + folder_name,
+                                disable=not self.show_progress):
+                file_type = rec.get('file_type') or rec.get('Type') or ''
+                dest_dir = self.output_folder / folder_name
+                if self.video_subfolder and file_type == 'video':
+                    dest_dir = dest_dir / 'videos'
+                movements.append(self._move_file(rec, dest_dir, folder_name))
+
+        return movements
+
+    def _rename_folders_with_counts(self, movements):
+        folder_counts = defaultdict(int)
+
+        for m in movements:
+            if m['status'] == 'Success' and m.get('destination'):
+                dest = Path(m['destination'])
+                parent = dest.parent
+                if parent.name == 'videos':
+                    parent = parent.parent
+                folder_counts[str(parent)] += 1
+
+        for folder_str, count in folder_counts.items():
+            folder_path = Path(folder_str)
+            if not folder_path.exists():
+                continue
+
+            old_name = folder_path.name
+            m = RE_PIC_COUNT.match(old_name)
+            if not m:
+                continue
+
+            old_count = int(m.group(2))
+            if old_count == count:
+                continue
+
+            new_name = m.group(1) + '-' + str(count) + 'pic' + m.group(3)
+            new_path = folder_path.parent / new_name
+
+            if new_path.exists():
+                continue
+
             try:
-                rec = self._extract(fp)
-                records.append(rec)
-                if checkpoint:
-                    checkpoint.mark_processed(str(fp))
+                folder_path.rename(new_path)
+                logger.info('Renamed: %s -> %s', old_name, new_name)
+
+                old_str = str(folder_path)
+                new_str = str(new_path)
+                for mv in movements:
+                    if mv.get('destination') and old_str in mv['destination']:
+                        mv['destination'] = mv['destination'].replace(old_name, new_name)
+                    if mv.get('folder') == old_name:
+                        mv['folder'] = new_name
             except Exception as e:
-                logger.error(f"Error {fp}: {e}")
-                records.append(self._error_record(fp, str(e)))
-        return records
+                logger.warning('Rename failed %s: %s', old_name, e)
 
-    def _scan_parallel(self, files, checkpoint):
-        from .parallel_processor import ParallelProcessor
-        workers = self.parallel_workers if self.parallel_workers > 0 else 4
-        pp = ParallelProcessor(max_workers=workers, show_progress=self.show_progress)
+    def _move_file(self, rec, dest_dir, folder_label):
+        src = rec.get('full_path') or rec.get('Full Path') or ''
+        fn = rec.get('filename') or rec.get('Filename') or ''
 
-        def process_one(fp):
-            try:
-                rec = self._extract(fp)
-                if checkpoint:
-                    checkpoint.mark_processed(str(fp))
-                return rec
-            except Exception as e:
-                logger.error(f"Error {fp}: {e}")
-                return self._error_record(fp, str(e))
+        if not src:
+            return {
+                'filename': fn,
+                'source': '',
+                'destination': '',
+                'status': 'Error: No path',
+                'folder': folder_label
+            }
 
-        results = pp.process(files, process_one, desc="Scanning (parallel)")
-        return [r for r in results if r is not None]
+        source = Path(src)
+        if not source.exists():
+            return {
+                'filename': fn,
+                'source': str(source),
+                'destination': '',
+                'status': 'Error: Not found',
+                'folder': folder_label
+            }
 
-    def _find_files(self, folder):
-        files = []
-        if self.recursive:
-            for dp, _, fns in os.walk(folder):
-                for fn in fns:
-                    if Path(fn).suffix.lower() in self.all_exts:
-                        fp = Path(dp) / fn
-                        if fp.is_file():
-                            files.append(fp)
-        else:
-            for item in folder.iterdir():
-                if item.is_file() and item.suffix.lower() in self.all_exts:
-                    files.append(item)
-        return sorted(files)
+        ensure_directory(dest_dir)
+        dest = resolve_filename_conflict(
+            dest_dir / safe_filename(source.name),
+            self.conflict
+        )
+        if dest is None:
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': '',
+                'status': 'Skipped (conflict)',
+                'folder': folder_label
+            }
 
-    def _debug_folder(self, folder):
         try:
-            ext_counts = {}
-            gen = folder.rglob('*') if self.recursive else folder.iterdir()
-            for f in gen:
-                if f.is_file():
-                    ext_counts[f.suffix.lower()] = ext_counts.get(f.suffix.lower(), 0) + 1
-            if ext_counts:
-                logger.info("Extensions found:")
-                for ext, cnt in sorted(ext_counts.items(), key=lambda x: -x[1])[:15]:
-                    logger.info(f"  {'Y' if ext in self.all_exts else 'N'} {ext}: {cnt}")
-        except Exception:
-            pass
+            if self.operation == 'move':
+                shutil.move(str(source), str(dest))
+            else:
+                shutil.copy2(str(source), str(dest))
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': str(dest),
+                'status': 'Success',
+                'folder': folder_label
+            }
+        except Exception as e:
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': str(dest),
+                'status': 'Error: ' + str(e),
+                'folder': folder_label
+            }
 
-    def _detect_type(self, ext):
-        if ext in self.image_exts:
-            return "image"
-        elif ext in self.video_exts:
-            return "video"
-        return "other"
+    def _report(self, movements):
+        try:
+            rp = self.output_folder / 'organization-report.txt'
+            with open(rp, 'w', encoding='utf-8') as f:
+                f.write('Organization Report\n')
+                f.write('=' * 60 + '\n')
+                f.write('Generated: ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '\n')
+                f.write('Structure: ' + self.folder_structure + '\n')
+                f.write('Separate screenshots: ' + str(self.separate_screenshots) + '\n')
+                f.write('Reuse existing: ' + str(self.reuse_existing) + '\n')
+                f.write('Video subfolder: ' + str(self.video_subfolder) + '\n')
+                f.write('Operation: ' + self.operation + '\n')
+                f.write('Conflict: ' + self.conflict + '\n')
+                f.write('Day threshold: ' + str(self.day_threshold) + '\n\n')
 
-    def _extract(self, filepath):
-        """Extract metadata - single file load optimization."""
-        defaults = get_record_defaults()
-        stat = filepath.stat()
-        ext = filepath.suffix.lower()
-        file_type = self._detect_type(ext)
-        mod_date = get_file_modification_date(filepath)
+                s = sum(1 for m in movements if m['status'] == 'Success')
+                e = sum(1 for m in movements if 'Error' in m['status'])
+                sk = sum(1 for m in movements if 'Skip' in m['status'])
+                f.write('Success: ' + str(s) + '\n')
+                f.write('Errors: ' + str(e) + '\n')
+                f.write('Skipped: ' + str(sk) + '\n')
+                f.write('Total: ' + str(len(movements)) + '\n\n')
 
-        # Hash - skip for videos if configured, skip entirely if duplicates disabled
-        file_hash = ''
-        if file_type == 'video' and self.skip_video_hash:
-            file_hash = ''
-        elif self.duplicates_enabled:
-            file_hash = calculate_file_hash(filepath, self.hash_algorithm)
+                f.write('=' * 60 + '\n')
+                f.write('FOLDER DISTRIBUTION\n')
+                f.write('=' * 60 + '\n')
+                fc = defaultdict(int)
+                for m in movements:
+                    if m['status'] == 'Success':
+                        fc[m['folder']] += 1
+                for fld in sorted(fc):
+                    f.write('  ' + fld + ': ' + str(fc[fld]) + ' files\n')
 
-        defaults.update({
-            'filename': filepath.name,
-            'folder': str(filepath.parent),
-            'full_path': str(filepath),
-            'extension': ext.lstrip('.').upper(),
-            'file_type': file_type,
-            'size_mb': round(stat.st_size / (1024 * 1024), 2),
-            'file_modified': mod_date.strftime('%Y-%m-%d %H:%M:%S') if mod_date else '',
-            'md5_hash': file_hash,
-        })
-
-        if file_type == 'image':
-            # ── SINGLE LOAD OPTIMIZATION ──
-            # Load PIL and CV2 images ONCE, pass to all processors
-            pil_img = None
-            cv2_img = None
-
-            # Load PIL image (for metadata, thumbnail, tagging)
-            if PIL_OK:
-                try:
-                    pil_img = PILImage.open(filepath)
-                except Exception as e:
-                    defaults['error'] = str(e)[:120]
-
-            # Load CV2 image ONCE (for blur + face detection)
-            if CV2_OK and (self.blur_enabled or self.face_enabled):
-                try:
-                    cv2_img = cv2.imread(str(filepath))
-                except Exception:
-                    pass
-
-            # Extract image metadata using loaded PIL image
-            if pil_img:
-                defaults.update(self._extract_image_from_pil(filepath, pil_img))
-
-            # Blur detection using loaded CV2 image (no re-read)
-            if self.blur_enabled and cv2_img is not None:
-                try:
-                    gray = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
-                    score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-                    is_blurry, blur_score, quality_rating = self.blur_detector._classify(score)
-                    defaults['is_blurry'] = is_blurry
-                    defaults['blur_score'] = blur_score
-                    defaults['quality_rating'] = quality_rating
-                except Exception as e:
-                    logger.debug(f"Blur error {filepath}: {e}")
-
-            # Quality score
-            try:
-                qs, qi = self.blur_detector.calculate_quality_score(
-                    defaults.get('blur_score'),
-                    defaults.get('width'),
-                    defaults.get('height'),
-                    defaults.get('has_exif', False))
-                defaults['quality_score'] = qs
-                defaults['quality_issues'] = qi
-            except Exception:
-                pass
-
-            # Face detection using loaded CV2 image (no re-read)
-            if self.face_enabled and self._face_detector and cv2_img is not None:
-                try:
-                    gray_face = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
-                    h_img, w_img = gray_face.shape
-                    scale = 1.0
-                    if max(h_img, w_img) > 1200:
-                        scale = 1200.0 / max(h_img, w_img)
-                        gray_face = cv2.resize(gray_face, None, fx=scale, fy=scale)
-                    if self._face_detector._cascade is not None:
-                        faces = self._face_detector._cascade.detectMultiScale(
-                            gray_face, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-                        count = len(faces) if faces is not None else 0
-                        defaults['face_count'] = count
-                        if count == 0:
-                            defaults['face_category'] = 'No People'
-                        elif count == 1:
-                            defaults['face_category'] = 'Portrait'
-                        elif count <= 4:
-                            defaults['face_category'] = 'Small Group'
+                cats = defaultdict(int)
+                for m in movements:
+                    if m['status'] == 'Success':
+                        folder = m.get('folder', '').lower()
+                        if 'screenshot' in folder:
+                            cats['Screenshots'] += 1
+                        elif 'undated' in folder:
+                            cats['Undated'] += 1
                         else:
-                            defaults['face_category'] = 'Large Group'
-                except Exception as e:
-                    logger.debug(f"Face error {filepath}: {e}")
+                            cats['Dated Photos/Videos'] += 1
 
-            # Thumbnail using loaded PIL image (no re-read)
-            if self.thumb_enabled and self._thumb_generator and pil_img:
-                try:
-                    thumb_name = f"thumb-{filepath.stem}-{stat.st_size}.jpg"
-                    thumb_path = Path(self._thumb_generator.output_folder) / thumb_name
-                    if not thumb_path.exists():
-                        img_copy = pil_img.copy().convert('RGB')
-                        img_copy.thumbnail(self._thumb_generator.size, PILImage.LANCZOS)
-                        img_copy.save(thumb_path, 'JPEG', quality=75)
-                    defaults['thumbnail_path'] = str(thumb_path)
-                except Exception as e:
-                    logger.debug(f"Thumb error {filepath}: {e}")
+                if cats:
+                    f.write('\n' + '=' * 60 + '\n')
+                    f.write('CATEGORY BREAKDOWN\n')
+                    f.write('=' * 60 + '\n')
+                    for cat in sorted(cats, key=lambda x: -cats[x]):
+                        f.write('  ' + cat + ': ' + str(cats[cat]) + ' files\n')
 
-            # Auto-tagging using loaded PIL image
-            if self.tag_enabled and self._auto_tagger and pil_img:
-                try:
-                    tag_result = self._auto_tagger.tag(filepath)
-                    defaults.update(tag_result)
-                except Exception as e:
-                    logger.debug(f"Tag error {filepath}: {e}")
+                err_list = [m for m in movements if 'Error' in m['status']]
+                if err_list:
+                    f.write('\n' + '=' * 60 + '\n')
+                    f.write('ERRORS\n')
+                    f.write('=' * 60 + '\n')
+                    for m in err_list[:50]:
+                        f.write('  ' + m['filename'] + ': ' + m['status'] + '\n')
+                    if len(err_list) > 50:
+                        remaining = len(err_list) - 50
+                        f.write('  ... and ' + str(remaining) + ' more errors\n')
 
-            # Close PIL image to free memory
-            if pil_img:
-                try:
-                    pil_img.close()
-                except Exception:
-                    pass
-
-        elif file_type == 'video':
-            defaults.update(self._extract_video(filepath))
-
-            # Video thumbnail
-            if self.thumb_enabled and self._thumb_generator:
-                try:
-                    defaults['thumbnail_path'] = self._thumb_generator.generate_for_video(filepath)
-                except Exception as e:
-                    logger.debug(f"Video thumb error {filepath}: {e}")
-
-        return defaults
-
-    def _extract_image_from_pil(self, filepath, pil_img):
-        """Extract image metadata from already-loaded PIL image."""
-        meta = {}
-        try:
-            meta['width'] = pil_img.width
-            meta['height'] = pil_img.height
-            meta['mode'] = pil_img.mode
-
-            # DPI
-            try:
-                dpi = pil_img.info.get('dpi')
-                if dpi and isinstance(dpi, tuple) and len(dpi) >= 2:
-                    meta['dpi'] = f"{int(dpi[0])}x{int(dpi[1])}"
-            except Exception:
-                pass
-
-            # EXIF
-            try:
-                exif_raw = pil_img.getexif() if hasattr(pil_img, 'getexif') else None
-                if exif_raw and len(exif_raw) > 0:
-                    meta['has_exif'] = True
-                    exif = {TAGS.get(tid, str(tid)): v for tid, v in exif_raw.items()}
-
-                    meta['camera_make'] = safe_string(exif.get('Make', ''))
-                    meta['camera_model'] = safe_string(exif.get('Model', ''))
-                    meta['date_taken'] = parse_exif_date(exif)
-
-                    # Focal Length
-                    fl = exif.get('FocalLength')
-                    if fl:
-                        try:
-                            if isinstance(fl, tuple) and len(fl) == 2 and fl[1]:
-                                meta['focal_length'] = f"{fl[0]/fl[1]:.1f}mm"
-                            elif isinstance(fl, (int, float)):
-                                meta['focal_length'] = f"{float(fl):.1f}mm"
-                            else:
-                                meta['focal_length'] = str(fl)
-                        except Exception:
-                            meta['focal_length'] = str(fl)
-
-                    # Aperture
-                    fn = exif.get('FNumber')
-                    if fn:
-                        try:
-                            if isinstance(fn, tuple) and len(fn) == 2 and fn[1]:
-                                meta['aperture'] = f"f/{fn[0]/fn[1]:.1f}"
-                            elif isinstance(fn, (int, float)):
-                                meta['aperture'] = f"f/{float(fn):.1f}"
-                            else:
-                                meta['aperture'] = str(fn)
-                        except Exception:
-                            meta['aperture'] = str(fn)
-
-                    # ISO
-                    iso = exif.get('ISOSpeedRatings') or exif.get('PhotographicSensitivity')
-                    if iso:
-                        meta['iso'] = str(iso)
-
-                    # Exposure Time
-                    et = exif.get('ExposureTime')
-                    if et:
-                        try:
-                            if isinstance(et, tuple) and len(et) == 2 and et[1]:
-                                v = et[0] / et[1]
-                                meta['exposure_time'] = f"1/{int(1/v)}s" if v < 1 else f"{v:.1f}s"
-                            elif isinstance(et, (int, float)):
-                                meta['exposure_time'] = f"{float(et)}s"
-                            else:
-                                meta['exposure_time'] = str(et)
-                        except Exception:
-                            meta['exposure_time'] = str(et)
-
-                    # GPS
-                    gps_lat, gps_lon = parse_gps_coordinates(exif.get('GPSInfo'))
-                    if gps_lat is not None:
-                        meta['gps_lat'] = round(gps_lat, 6)
-                    if gps_lon is not None:
-                        meta['gps_lon'] = round(gps_lon, 6)
-
-            except Exception as e:
-                logger.debug(f"EXIF error {filepath}: {e}")
-
+            logger.info('Report saved: %s', rp)
         except Exception as e:
-            meta['error'] = str(e)[:120]
-
-        return meta
-
-    def _extract_video(self, filepath):
-        """Extract video-specific metadata."""
-        meta = {'quality_issues': 'Video file'}
-        try:
-            vm = self.video_extractor.extract(filepath)
-            meta.update(vm)
-            # Map video resolution to width/height for consistency
-            if meta.get('video_width'):
-                meta['width'] = meta['video_width']
-            if meta.get('video_height'):
-                meta['height'] = meta['video_height']
-        except Exception as e:
-            meta['error'] = str(e)[:120]
-        return meta
-
-    def _batch_geocode(self, records):
-        """Batch geocode all records with GPS data."""
-        coords = []
-        indices = []
-        for i, r in enumerate(records):
-            lat, lon = r.get('gps_lat'), r.get('gps_lon')
-            if lat is not None and lon is not None:
-                coords.append((lat, lon))
-                indices.append(i)
-
-        if not coords:
-            return
-
-        logger.info(f"Geocoding {len(coords)} locations...")
-        try:
-            results = self._geocoder.geocode_batch(coords)
-            for i, geo in zip(indices, results):
-                records[i].update(geo)
-            logger.info("Geocoding complete")
-        except Exception as e:
-            logger.error(f"Batch geocode error: {e}")
-
-    def _error_record(self, filepath, msg):
-        """Create minimal record for failed files."""
-        rec = get_record_defaults()
-        try:
-            stat = filepath.stat()
-            rec['size_mb'] = round(stat.st_size / (1024 * 1024), 2)
-            rec['file_modified'] = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-        except Exception:
-            pass
-        rec.update({
-            'filename': filepath.name,
-            'folder': str(filepath.parent),
-            'full_path': str(filepath),
-            'extension': filepath.suffix.lstrip('.').upper(),
-            'file_type': self._detect_type(filepath.suffix.lower()),
-            'error': msg[:120],
-            'quality_score': 0,
-            'quality_issues': f'Error: {msg[:80]}',
-            'metadata_status': 'Error',
-            'date_source': 'None',
-        })
-        return rec
+            logger.error('Report error: %s', e)
