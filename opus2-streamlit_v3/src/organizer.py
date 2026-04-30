@@ -1,7 +1,6 @@
 # ============================================================
 # FILE: src/organizer.py
 # ============================================================
-
 """
 Image Organizer v2.2
 """
@@ -66,36 +65,42 @@ SCREEN_RESOLUTIONS = {
 }
 
 
-def _make_pic_count_pattern():
-    p = r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;
-    return re.compile(p)
+def _compile_pic_count():
+    start = '^'
+    prefix_group = '(.*?)'
+    dash = '-'
+    digits_group = '(\\d+)'
+    pic_word = 'pic'
+    rest_group = '(.*)'
+    end = '{formattedValue}#x27;
+    full = start + prefix_group + dash + digits_group + pic_word + rest_group + end
+    return re.compile(full)
 
 
-def _make_day_extract_pattern():
-    p = r'^\d{4}-\d{2}-(\d{2})(.*)'
-    return re.compile(p)
+def _compile_day_extract():
+    start = '^'
+    year = '\\d{4}'
+    dash = '-'
+    month = '\\d{2}'
+    day_group = '(\\d{2})'
+    rest_group = '(.*)'
+    full = start + year + dash + month + dash + day_group + rest_group
+    return re.compile(full)
 
 
-def _make_location_clean_pattern():
-    p = r'[^a-z0-9]+'
-    return re.compile(p)
+def _compile_location_clean():
+    return re.compile('[^a-z0-9]+')
 
 
-def _make_whatsapp_pattern():
-    p = r'^(?:IMG|VID|AUD|PTT|STK)-\d{8}-WA\d+'
-    return re.compile(p, re.IGNORECASE)
+def _compile_screenshot_kw():
+    words = 'screenshot|screen_shot|screen-shot|capture|snip'
+    return re.compile(words, re.IGNORECASE)
 
 
-def _make_screenshot_kw_pattern():
-    p = r'screenshot|screen_shot|screen-shot|capture|snip'
-    return re.compile(p, re.IGNORECASE)
-
-
-RE_PIC_COUNT = _make_pic_count_pattern()
-RE_DAY_EXTRACT = _make_day_extract_pattern()
-RE_LOCATION_CLEAN = _make_location_clean_pattern()
-RE_WHATSAPP = _make_whatsapp_pattern()
-RE_SCREENSHOT_KW = _make_screenshot_kw_pattern()
+RE_PIC_COUNT = _compile_pic_count()
+RE_DAY_EXTRACT = _compile_day_extract()
+RE_LOCATION_CLEAN = _compile_location_clean()
+RE_SCREENSHOT_KW = _compile_screenshot_kw()
 
 
 class ImageOrganizer:
@@ -213,7 +218,9 @@ class ImageOrganizer:
     def _update_folder_name_count(self, existing_name, new_count):
         m = RE_PIC_COUNT.match(existing_name)
         if m:
-            return m.group(1) + '-' + str(new_count) + 'pic' + m.group(3)
+            prefix = m.group(1)
+            suffix = m.group(3)
+            return prefix + '-' + str(new_count) + 'pic' + suffix
         return existing_name + '-' + str(new_count) + 'pic'
 
     def _build_dest_path(self, folder_name, dt, file_type):
@@ -474,7 +481,9 @@ class ImageOrganizer:
             if old_count == count:
                 continue
 
-            new_name = m.group(1) + '-' + str(count) + 'pic' + m.group(3)
+            prefix = m.group(1)
+            suffix = m.group(3)
+            new_name = prefix + '-' + str(count) + 'pic' + suffix
             new_path = folder_path.parent / new_name
 
             if new_path.exists():
@@ -484,9 +493,8 @@ class ImageOrganizer:
                 folder_path.rename(new_path)
                 logger.info('Renamed: %s -> %s', old_name, new_name)
 
-                old_str = str(folder_path)
                 for mv in movements:
-                    if mv.get('destination') and old_str in mv['destination']:
+                    if mv.get('destination') and old_name in mv['destination']:
                         mv['destination'] = mv['destination'].replace(old_name, new_name)
                     if mv.get('folder') == old_name:
                         mv['folder'] = new_name
@@ -557,7 +565,8 @@ class ImageOrganizer:
             lines = []
             lines.append('Organization Report')
             lines.append('=' * 60)
-            lines.append('Generated: ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            lines.append('Generated: ' + now_str)
             lines.append('Structure: ' + self.folder_structure)
             lines.append('Separate screenshots: ' + str(self.separate_screenshots))
             lines.append('Reuse existing: ' + str(self.reuse_existing))
@@ -622,4 +631,4 @@ class ImageOrganizer:
 
             logger.info('Report saved: %s', rp)
         except Exception as e:
-            logger.error('Report error: %s', e)         
+            logger.error('Report error: %s', e)
