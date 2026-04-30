@@ -1,6 +1,7 @@
 # ============================================================
 # FILE: src/organizer.py
 # ============================================================
+
 """
 Image Organizer v2.2
 """
@@ -621,4 +622,4 @@ class ImageOrganizer:
 
             logger.info('Report saved: %s', rp)
         except Exception as e:
-            logger.error('Report error: %s', e)
+            logger.error('Report error: %s', e)         
