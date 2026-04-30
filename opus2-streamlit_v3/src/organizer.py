@@ -66,26 +66,13 @@ SCREEN_RESOLUTIONS = {
 
 
 def _compile_pic_count():
-    start = '^'
-    prefix_group = '(.*?)'
-    dash = '-'
-    digits_group = '(\\d+)'
-    pic_word = 'pic'
-    rest_group = '(.*)'
-    end = '{formattedValue}#x27;
-    full = start + prefix_group + dash + digits_group + pic_word + rest_group + end
-    return re.compile(full)
+    p = '^' + '(.*?)' + '-' + '(\\d+)' + 'pic' + '(.*)' + chr(36)
+    return re.compile(p)
 
 
 def _compile_day_extract():
-    start = '^'
-    year = '\\d{4}'
-    dash = '-'
-    month = '\\d{2}'
-    day_group = '(\\d{2})'
-    rest_group = '(.*)'
-    full = start + year + dash + month + dash + day_group + rest_group
-    return re.compile(full)
+    p = '^' + '\\d{4}' + '-' + '\\d{2}' + '-' + '(\\d{2})' + '(.*)'
+    return re.compile(p)
 
 
 def _compile_location_clean():
