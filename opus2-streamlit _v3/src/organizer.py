@@ -3,11 +3,6 @@
 # ============================================================
 """
 Image Organizer v2.2
-- Folder format: YYYY-MM-DD-[xxpic]-[text]
-- Configurable date structure: flat | year-month | year-month-day
-- Screenshot separation
-- Video subfolder
-- Reuse existing dated folders
 """
 
 import re
@@ -27,25 +22,79 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 MONTH_NAMES = {
-    1: '01-Jan', 2: '02-Feb', 3: '03-Mar', 4: '04-Apr',
-    5: '05-May', 6: '06-Jun', 7: '07-Jul', 8: '08-Aug',
-    9: '09-Sep', 10: '10-Oct', 11: '11-Nov', 12: '12-Dec'
+    1: '01-Jan',
+    2: '02-Feb',
+    3: '03-Mar',
+    4: '04-Apr',
+    5: '05-May',
+    6: '06-Jun',
+    7: '07-Jul',
+    8: '08-Aug',
+    9: '09-Sep',
+    10: '10-Oct',
+    11: '11-Nov',
+    12: '12-Dec'
 }
 
 SCREEN_RESOLUTIONS = {
-    (1080, 1920), (1080, 2340), (1080, 2400), (1080, 2520),
-    (1170, 2532), (1179, 2556), (1284, 2778), (1290, 2796),
-    (1440, 2560), (1440, 3040), (1440, 3200),
-    (750, 1334), (828, 1792), (1125, 2436),
-    (1920, 1080), (2560, 1440), (3840, 2160),
-    (2048, 2732), (1668, 2388), (1620, 2160),
-    (1536, 2048), (2160, 1620), (2388, 1668),
-    (2732, 2048), (2048, 1536),
+    (1080, 1920),
+    (1080, 2340),
+    (1080, 2400),
+    (1080, 2520),
+    (1170, 2532),
+    (1179, 2556),
+    (1284, 2778),
+    (1290, 2796),
+    (1440, 2560),
+    (1440, 3040),
+    (1440, 3200),
+    (750, 1334),
+    (828, 1792),
+    (1125, 2436),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+    (2048, 2732),
+    (1668, 2388),
+    (1620, 2160),
+    (1536, 2048),
+    (2160, 1620),
+    (2388, 1668),
+    (2732, 2048),
+    (2048, 1536),
 }
 
-WHATSAPP_PATTERN = re.compile(
-    r'^(IMG|VID|AUD|PTT|STK)-\d{8}-WA\d+', re.IGNORECASE
-)
+
+def _make_pic_count_pattern():
+    p = r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;
+    return re.compile(p)
+
+
+def _make_day_extract_pattern():
+    p = r'^\d{4}-\d{2}-(\d{2})(.*)'
+    return re.compile(p)
+
+
+def _make_location_clean_pattern():
+    p = r'[^a-z0-9]+'
+    return re.compile(p)
+
+
+def _make_whatsapp_pattern():
+    p = r'^(?:IMG|VID|AUD|PTT|STK)-\d{8}-WA\d+'
+    return re.compile(p, re.IGNORECASE)
+
+
+def _make_screenshot_kw_pattern():
+    p = r'screenshot|screen_shot|screen-shot|capture|snip'
+    return re.compile(p, re.IGNORECASE)
+
+
+RE_PIC_COUNT = _make_pic_count_pattern()
+RE_DAY_EXTRACT = _make_day_extract_pattern()
+RE_LOCATION_CLEAN = _make_location_clean_pattern()
+RE_WHATSAPP = _make_whatsapp_pattern()
+RE_SCREENSHOT_KW = _make_screenshot_kw_pattern()
 
 
 class ImageOrganizer:
@@ -60,28 +109,20 @@ class ImageOrganizer:
         self.reuse_existing = org.get('reuse_existing_folders', True)
         self.video_subfolder = org.get('video_subfolder', True)
         self.show_progress = config.get('processing', {}).get('show_progress', True)
-
-        # v2.2 options
         self.folder_structure = org.get('folder_structure', 'flat')
         self.separate_screenshots = org.get('separate_screenshots', True)
 
         ensure_directory(self.output_folder)
         self._existing_cache = None
 
-    # ── Screenshot Detection ──
-
     def _is_screenshot(self, rec):
-        """Detect if file is a screenshot."""
         if not self.separate_screenshots:
             return False
 
-        # Check filename keywords
-        fn = str(rec.get('filename') or rec.get('Filename') or '').lower()
-        if any(kw in fn for kw in ['screenshot', 'screen_shot', 'screen-shot',
-                                     'capture', 'snip', 'screen shot']):
+        fn = str(rec.get('filename') or rec.get('Filename') or '')
+        if RE_SCREENSHOT_KW.search(fn):
             return True
 
-        # Check resolution + no EXIF
         w = rec.get('width') or rec.get('Width (px)')
         h = rec.get('height') or rec.get('Height (px)')
         has_exif = rec.get('has_exif') or rec.get('Has EXIF')
@@ -89,9 +130,9 @@ class ImageOrganizer:
 
         if w and h:
             try:
-                dims = (int(w), int(h))
-                dims_flip = (int(h), int(w))
-                if (dims in SCREEN_RESOLUTIONS or dims_flip in SCREEN_RESOLUTIONS):
+                iw = int(w)
+                ih = int(h)
+                if (iw, ih) in SCREEN_RESOLUTIONS or (ih, iw) in SCREEN_RESOLUTIONS:
                     if not has_exif or meta_status in ('No EXIF', 'Minimal EXIF'):
                         return True
             except (ValueError, TypeError):
@@ -99,21 +140,18 @@ class ImageOrganizer:
 
         return False
 
-    # ── Existing Folder Scanning ──
-
     def _scan_existing_folders(self):
-        """Scan output dir for existing YYYY-MM-DD* folders."""
         cache = {'daily': {}, 'monthly': {}}
         try:
             if not self.output_folder.exists():
                 return cache
 
-            if self.folder_structure != 'flat':
-                search_items = self.output_folder.rglob('*')
+            if self.folder_structure == 'flat':
+                items = self.output_folder.iterdir()
             else:
-                search_items = self.output_folder.iterdir()
+                items = self.output_folder.rglob('*')
 
-            for item in search_items:
+            for item in items:
                 if not item.is_dir():
                     continue
                 name = item.name
@@ -137,39 +175,26 @@ class ImageOrganizer:
                             'full_path': str(item),
                         }
 
-            if cache['daily'] or cache['monthly']:
-                logger.info(f"Existing folders: {len(cache['daily'])} daily, "
-                            f"{len(cache['monthly'])} monthly")
+            total = len(cache['daily']) + len(cache['monthly'])
+            if total > 0:
+                logger.info(
+                    'Existing folders: %d daily, %d monthly',
+                    len(cache['daily']),
+                    len(cache['monthly'])
+                )
         except Exception as e:
-            logger.warning(f"Scan existing folders error: {e}")
+            logger.warning('Scan existing folders error: %s', e)
         return cache
 
-    # ── Folder Name Builder ──
-
     def _build_folder_name(self, date_key, count, location_hint=''):
-        """
-        Build folder name: YYYY-MM-DD-XXpic or YYYY-MM-DD-XXpic-text
-        Examples:
-            2026-03-15-85pic
-            2026-03-15-85pic-singapore
-            2026-03-00-12pic
-        """
-        pic_label = f"{count}pic"
+        pic_part = str(count) + 'pic'
         if location_hint:
-            clean = re.sub(r'[^a-z0-9]+', '-', location_hint.lower()).strip('-')
+            clean = RE_LOCATION_CLEAN.sub('-', location_hint.lower()).strip('-')
             if clean and len(clean) > 1:
-                return f"{date_key}-{pic_label}-{clean}"
-        return f"{date_key}-{pic_label}"
-
-    def _build_screenshot_folder_name(self, count, dt=None):
-        """Build screenshot folder name with count."""
-        if dt:
-            month_key = dt.strftime('%Y-%m')
-            return f"{month_key}-screenshots-{count}pic"
-        return f"screenshots-{count}pic"
+                return date_key + '-' + pic_part + '-' + clean
+        return date_key + '-' + pic_part
 
     def _get_location_hint(self, records):
-        """Get most common location from a group of records."""
         locations = []
         for rec in records:
             for key in ['location_city', 'location_name', 'Location']:
@@ -184,41 +209,28 @@ class ImageOrganizer:
             return most_common[0]
         return ''
 
-    def _update_folder_name_with_count(self, existing_name, new_count):
-        """
-        Update the pic count in an existing folder name.
-        2026-03-15-85pic-singapore -> 2026-03-15-120pic-singapore
-        """
-        match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, existing_name)
-        if match:
-            prefix = match.group(1)
-            suffix = match.group(3)
-            return f"{prefix}-{new_count}pic{suffix}"
-        return f"{existing_name}-{new_count}pic"
-
-    # ── Path Builder ──
+    def _update_folder_name_count(self, existing_name, new_count):
+        m = RE_PIC_COUNT.match(existing_name)
+        if m:
+            return m.group(1) + '-' + str(new_count) + 'pic' + m.group(3)
+        return existing_name + '-' + str(new_count) + 'pic'
 
     def _build_dest_path(self, folder_name, dt, file_type):
-        """
-        Build full destination path based on folder_structure.
-
-        flat:           output/2026-03-15-85pic-singapore/
-        year-month:     output/2026/03-Mar/2026-03-15-85pic-singapore/
-        year-month-day: output/2026/03-Mar/15-85pic-singapore/
-        """
         if self.folder_structure == 'year-month' and dt:
             year = str(dt.year)
-            month = MONTH_NAMES.get(dt.month, f"{dt.month:02d}")
+            month = MONTH_NAMES.get(dt.month, str(dt.month).zfill(2))
             dest = self.output_folder / year / month / folder_name
+
         elif self.folder_structure == 'year-month-day' and dt:
             year = str(dt.year)
-            month = MONTH_NAMES.get(dt.month, f"{dt.month:02d}")
-            day_match = re.match(r'^\d{4}-\d{2}-(\d{2})(.*)', folder_name)
-            if day_match:
-                day_name = day_match.group(1) + day_match.group(2)
+            month = MONTH_NAMES.get(dt.month, str(dt.month).zfill(2))
+            m = RE_DAY_EXTRACT.match(folder_name)
+            if m:
+                day_name = m.group(1) + m.group(2)
                 dest = self.output_folder / year / month / day_name
             else:
                 dest = self.output_folder / year / month / folder_name
+
         else:
             dest = self.output_folder / folder_name
 
@@ -227,10 +239,7 @@ class ImageOrganizer:
 
         return dest
 
-    # ── Resolve Existing ──
-
     def _find_existing_folder(self, date_key):
-        """Check if an existing folder matches this date."""
         if not self.reuse_existing or not self._existing_cache:
             return None
 
@@ -245,10 +254,7 @@ class ImageOrganizer:
 
         return None
 
-    # ── Date Extraction ──
-
     def _date(self, r):
-        """Extract date from record."""
         if self.use_exif:
             for k in ['date_taken', 'Date Taken']:
                 v = r.get(k)
@@ -264,8 +270,6 @@ class ImageOrganizer:
                     return dt
         return None
 
-    # ── Main Organize ──
-
     def organize(self, records):
         if not records:
             return []
@@ -278,9 +282,10 @@ class ImageOrganizer:
         skipped = 0
 
         for r in records:
-            delete_flag = str(r.get('delete_flag', '') or
-                              r.get('DELETE? (Yes/No)', '') or '').strip().lower()
-            if delete_flag in ('yes', 'true', '1'):
+            delete_val = str(
+                r.get('delete_flag', '') or r.get('DELETE? (Yes/No)', '') or ''
+            ).strip().lower()
+            if delete_val in ('yes', 'true', '1'):
                 skipped += 1
                 continue
 
@@ -289,64 +294,61 @@ class ImageOrganizer:
             else:
                 normal.append(r)
 
-        logger.info(f"Organizing: {len(normal)} normal, {len(screenshots)} screenshots, "
-                     f"{skipped} skipped (deleted)")
+        logger.info(
+            'Organizing: %d normal, %d screenshots, %d skipped',
+            len(normal), len(screenshots), skipped
+        )
 
         movements = []
 
-        # Process Screenshots
         if screenshots:
-            print(f"  📱 Screenshots: {len(screenshots)}")
+            print('  Screenshots: ' + str(len(screenshots)))
             movements.extend(self._organize_screenshots(screenshots))
 
-        # Process Normal Photos/Videos
         if normal:
             movements.extend(self._organize_normal(normal))
 
-        # Rename folders with final counts
         self._rename_folders_with_counts(movements)
-
         self._report(movements)
 
         success = sum(1 for m in movements if m['status'] == 'Success')
         errors = sum(1 for m in movements if 'Error' in m['status'])
-        logger.info(f"Organization done: {success} success, {errors} errors")
+        logger.info('Organization done: %d success, %d errors', success, errors)
 
         return movements
 
     def _organize_screenshots(self, screenshots):
-        """Organize screenshot files into screenshot folders."""
         movements = []
 
         month_groups = defaultdict(list)
         for rec in screenshots:
             dt = self._date(rec)
             if dt:
-                month_key = dt.strftime('%Y-%m')
-                month_groups[month_key].append((rec, dt))
+                mk = dt.strftime('%Y-%m')
+                month_groups[mk].append((rec, dt))
             else:
                 month_groups['undated'].append((rec, None))
 
         for month_key, group in month_groups.items():
             count = len(group)
             if month_key == 'undated':
-                folder_name = f"screenshots-{count}pic"
+                folder_name = 'screenshots-' + str(count) + 'pic'
                 sample_dt = None
             else:
-                folder_name = f"{month_key}-screenshots-{count}pic"
+                folder_name = month_key + '-screenshots-' + str(count) + 'pic'
                 sample_dt = group[0][1]
 
-            for rec, dt in tqdm(group, desc=f"  {folder_name}",
-                                 disable=not self.show_progress):
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
                 file_type = rec.get('file_type') or rec.get('Type') or ''
 
                 if self.folder_structure == 'year-month' and sample_dt:
                     year = str(sample_dt.year)
-                    month = MONTH_NAMES.get(sample_dt.month, f"{sample_dt.month:02d}")
+                    month = MONTH_NAMES.get(sample_dt.month, str(sample_dt.month).zfill(2))
                     dest_dir = self.output_folder / year / month / folder_name
                 elif self.folder_structure == 'year-month-day' and sample_dt:
                     year = str(sample_dt.year)
-                    month = MONTH_NAMES.get(sample_dt.month, f"{sample_dt.month:02d}")
+                    month = MONTH_NAMES.get(sample_dt.month, str(sample_dt.month).zfill(2))
                     dest_dir = self.output_folder / year / month / folder_name
                 else:
                     dest_dir = self.output_folder / folder_name
@@ -359,7 +361,6 @@ class ImageOrganizer:
         return movements
 
     def _organize_normal(self, records):
-        """Organize normal photos and videos by date with pic counts."""
         movements = []
 
         dated = [(r, self._date(r)) for r in records]
@@ -386,10 +387,11 @@ class ImageOrganizer:
                 month_key = day_key[:6]
                 monthly_buckets[month_key].extend(day_records[day_key])
 
-        # Process daily folders
-        daily_count = len(daily_days)
-        if daily_count:
-            logger.info(f"Daily folders: {daily_count} days with >= {self.day_threshold} files")
+        if daily_days:
+            logger.info(
+                'Daily folders: %d days with >= %d files',
+                len(daily_days), self.day_threshold
+            )
 
         for day_key in sorted(daily_days):
             group = day_records[day_key]
@@ -402,17 +404,16 @@ class ImageOrganizer:
             existing = self._find_existing_folder(date_str)
             if existing:
                 folder_name = existing['name']
-                logger.info(f"Reusing existing folder: {folder_name}")
+                logger.info('Reusing existing folder: %s', folder_name)
             else:
                 folder_name = self._build_folder_name(date_str, count, location)
 
-            desc = f"  {folder_name}"
-            for rec, dt in tqdm(group, desc=desc, disable=not self.show_progress):
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
                 file_type = rec.get('file_type') or rec.get('Type') or ''
                 dest_dir = self._build_dest_path(folder_name, dt, file_type)
                 movements.append(self._move_file(rec, dest_dir, folder_name))
 
-        # Process monthly buckets
         for month_key in sorted(monthly_buckets):
             group = monthly_buckets[month_key]
             sample_dt = group[0][1]
@@ -424,22 +425,21 @@ class ImageOrganizer:
             existing = self._find_existing_folder(date_str)
             if existing:
                 folder_name = existing['name']
-                logger.info(f"Reusing existing folder: {folder_name}")
+                logger.info('Reusing existing folder: %s', folder_name)
             else:
                 folder_name = self._build_folder_name(date_str, count, location)
 
-            desc = f"  {folder_name}"
-            for rec, dt in tqdm(group, desc=desc, disable=not self.show_progress):
+            for rec, dt in tqdm(group, desc='  ' + folder_name,
+                                disable=not self.show_progress):
                 file_type = rec.get('file_type') or rec.get('Type') or ''
                 dest_dir = self._build_dest_path(folder_name, dt, file_type)
                 movements.append(self._move_file(rec, dest_dir, folder_name))
 
-        # Process undated
         if undated:
             count = len(undated)
-            folder_name = f"undated-{count}pic"
-            for rec, dt in tqdm(undated, desc=f"  {folder_name}",
-                                 disable=not self.show_progress):
+            folder_name = 'undated-' + str(count) + 'pic'
+            for rec, dt in tqdm(undated, desc='  ' + folder_name,
+                                disable=not self.show_progress):
                 file_type = rec.get('file_type') or rec.get('Type') or ''
                 dest_dir = self.output_folder / folder_name
                 if self.video_subfolder and file_type == 'video':
@@ -448,15 +448,8 @@ class ImageOrganizer:
 
         return movements
 
-    # ── Rename Folders With Actual Counts ──
-
     def _rename_folders_with_counts(self, movements):
-        """
-        After all files are copied/moved, rename folders to reflect
-        actual file counts (in case some were skipped/errored).
-        """
         folder_counts = defaultdict(int)
-        folder_paths = {}
 
         for m in movements:
             if m['status'] == 'Success' and m.get('destination'):
@@ -465,122 +458,167 @@ class ImageOrganizer:
                 if parent.name == 'videos':
                     parent = parent.parent
                 folder_counts[str(parent)] += 1
-                folder_paths[str(parent)] = parent
 
         for folder_str, count in folder_counts.items():
-            folder = Path(folder_str)
-            if not folder.exists():
+            folder_path = Path(folder_str)
+            if not folder_path.exists():
                 continue
 
-            old_name = folder.name
-            match = re.match(r'^(.*?)-(\d+)pic(.*){formattedValue}#x27;, old_name)
-            if match:
-                prefix = match.group(1)
-                old_count = int(match.group(2))
-                suffix = match.group(3)
+            old_name = folder_path.name
+            m = RE_PIC_COUNT.match(old_name)
+            if not m:
+                continue
 
-                if old_count != count:
-                    new_name = f"{prefix}-{count}pic{suffix}"
-                    new_path = folder.parent / new_name
-                    if not new_path.exists():
-                        try:
-                            folder.rename(new_path)
-                            logger.info(f"Renamed: {old_name} -> {new_name}")
-                            for m in movements:
-                                if m.get('destination') and folder_str in m['destination']:
-                                    m['destination'] = m['destination'].replace(
-                                        old_name, new_name)
-                                if m.get('folder') == old_name:
-                                    m['folder'] = new_name
-                        except Exception as e:
-                            logger.warning(f"Rename failed {old_name}: {e}")
+            old_count = int(m.group(2))
+            if old_count == count:
+                continue
 
-    # ── File Mover ──
+            new_name = m.group(1) + '-' + str(count) + 'pic' + m.group(3)
+            new_path = folder_path.parent / new_name
+
+            if new_path.exists():
+                continue
+
+            try:
+                folder_path.rename(new_path)
+                logger.info('Renamed: %s -> %s', old_name, new_name)
+
+                old_str = str(folder_path)
+                for mv in movements:
+                    if mv.get('destination') and old_str in mv['destination']:
+                        mv['destination'] = mv['destination'].replace(old_name, new_name)
+                    if mv.get('folder') == old_name:
+                        mv['folder'] = new_name
+            except Exception as e:
+                logger.warning('Rename failed %s: %s', old_name, e)
 
     def _move_file(self, rec, dest_dir, folder_label):
-        """Copy or move a single file to destination."""
         src = rec.get('full_path') or rec.get('Full Path') or ''
         fn = rec.get('filename') or rec.get('Filename') or ''
 
         if not src:
-            return {'filename': fn, 'source': '', 'destination': '',
-                    'status': 'Error: No path', 'folder': folder_label}
+            return {
+                'filename': fn,
+                'source': '',
+                'destination': '',
+                'status': 'Error: No path',
+                'folder': folder_label
+            }
+
         source = Path(src)
         if not source.exists():
-            return {'filename': fn, 'source': str(source), 'destination': '',
-                    'status': 'Error: Not found', 'folder': folder_label}
+            return {
+                'filename': fn,
+                'source': str(source),
+                'destination': '',
+                'status': 'Error: Not found',
+                'folder': folder_label
+            }
 
         ensure_directory(dest_dir)
         dest = resolve_filename_conflict(
-            dest_dir / safe_filename(source.name), self.conflict)
+            dest_dir / safe_filename(source.name),
+            self.conflict
+        )
         if dest is None:
-            return {'filename': source.name, 'source': str(source),
-                    'destination': '', 'status': 'Skipped (conflict)',
-                    'folder': folder_label}
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': '',
+                'status': 'Skipped (conflict)',
+                'folder': folder_label
+            }
 
         try:
             if self.operation == 'move':
                 shutil.move(str(source), str(dest))
             else:
                 shutil.copy2(str(source), str(dest))
-            return {'filename': source.name, 'source': str(source),
-                    'destination': str(dest), 'status': 'Success',
-                    'folder': folder_label}
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': str(dest),
+                'status': 'Success',
+                'folder': folder_label
+            }
         except Exception as e:
-            return {'filename': source.name, 'source': str(source),
-                    'destination': str(dest), 'status': f'Error: {e}',
-                    'folder': folder_label}
-
-    # ── Report ──
+            return {
+                'filename': source.name,
+                'source': str(source),
+                'destination': str(dest),
+                'status': 'Error: ' + str(e),
+                'folder': folder_label
+            }
 
     def _report(self, movements):
         try:
             rp = self.output_folder / 'organization-report.txt'
+            lines = []
+            lines.append('Organization Report')
+            lines.append('=' * 60)
+            lines.append('Generated: ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            lines.append('Structure: ' + self.folder_structure)
+            lines.append('Separate screenshots: ' + str(self.separate_screenshots))
+            lines.append('Reuse existing: ' + str(self.reuse_existing))
+            lines.append('Video subfolder: ' + str(self.video_subfolder))
+            lines.append('Operation: ' + self.operation)
+            lines.append('Conflict: ' + self.conflict)
+            lines.append('Day threshold: ' + str(self.day_threshold))
+            lines.append('')
+
+            s = sum(1 for m in movements if m['status'] == 'Success')
+            e = sum(1 for m in movements if 'Error' in m['status'])
+            sk = sum(1 for m in movements if 'Skip' in m['status'])
+            lines.append('Success: ' + str(s))
+            lines.append('Errors: ' + str(e))
+            lines.append('Skipped: ' + str(sk))
+            lines.append('Total: ' + str(len(movements)))
+            lines.append('')
+
+            lines.append('=' * 60)
+            lines.append('FOLDER DISTRIBUTION')
+            lines.append('=' * 60)
+            fc = defaultdict(int)
+            for m in movements:
+                if m['status'] == 'Success':
+                    fc[m['folder']] += 1
+            for fld in sorted(fc):
+                lines.append('  ' + fld + ': ' + str(fc[fld]) + ' files')
+
+            cats = defaultdict(int)
+            for m in movements:
+                if m['status'] == 'Success':
+                    folder = m.get('folder', '').lower()
+                    if 'screenshot' in folder:
+                        cats['Screenshots'] += 1
+                    elif 'undated' in folder:
+                        cats['Undated'] += 1
+                    else:
+                        cats['Dated Photos/Videos'] += 1
+
+            if cats:
+                lines.append('')
+                lines.append('=' * 60)
+                lines.append('CATEGORY BREAKDOWN')
+                lines.append('=' * 60)
+                for cat in sorted(cats, key=lambda x: -cats[x]):
+                    lines.append('  ' + cat + ': ' + str(cats[cat]) + ' files')
+
+            err_list = [m for m in movements if 'Error' in m['status']]
+            if err_list:
+                lines.append('')
+                lines.append('=' * 60)
+                lines.append('ERRORS')
+                lines.append('=' * 60)
+                for m in err_list[:50]:
+                    lines.append('  ' + m['filename'] + ': ' + m['status'])
+                if len(err_list) > 50:
+                    remaining = len(err_list) - 50
+                    lines.append('  ... and ' + str(remaining) + ' more errors')
+
             with open(rp, 'w', encoding='utf-8') as f:
-                f.write(f"Organization Report\n{'='*60}\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Structure: {self.folder_structure}\n")
-                f.write(f"Separate screenshots: {self.separate_screenshots}\n")
-                f.write(f"Reuse existing: {self.reuse_existing}\n")
-                f.write(f"Video subfolder: {self.video_subfolder}\n")
-                f.write(f"Operation: {self.operation}\n")
-                f.write(f"Conflict: {self.conflict}\n")
-                f.write(f"Day threshold: {self.day_threshold}\n\n")
+                f.write('\n'.join(lines))
 
-                s = sum(1 for m in movements if m['status'] == 'Success')
-                e = sum(1 for m in movements if 'Error' in m['status'])
-                sk = sum(1 for m in movements if 'Skip' in m['status'])
-                f.write(f"Success: {s}\nErrors: {e}\nSkipped: {sk}\n"
-                        f"Total: {len(movements)}\n\n")
-
-                f.write(f"{'='*60}\nFOLDER DISTRIBUTION\n{'='*60}\n")
-                fc = defaultdict(int)
-                for m in movements:
-                    if m['status'] == 'Success':
-                        fc[m['folder']] += 1
-                for fld in sorted(fc):
-                    f.write(f"  {fld}: {fc[fld]} files\n")
-
-                cats = defaultdict(int)
-                for m in movements:
-                    if m['status'] == 'Success':
-                        folder = m.get('folder', '').lower()
-                        if 'screenshot' in folder:
-                            cats['Screenshots'] += 1
-                        elif 'undated' in folder:
-                            cats['Undated'] += 1
-                        else:
-                            cats['Dated Photos/Videos'] += 1
-
-                if cats:
-                    f.write(f"\n{'='*60}\nCATEGORY BREAKDOWN\n{'='*60}\n")
-                    for cat, cnt in sorted(cats.items(), key=lambda x: -x[1]):
-                        f.write(f"  {cat}: {cnt} files\n")
-
-                err_list = [m for m in movements if 'Error' in m['status']]
-                if err_list:
-                    f.write(f"\n{'='*60}\nERRORS\n{'='*60}\n")
-                    for m in err_list[:50]:
-                        f.write(f"  {m['filename']}: {m['status']}\n")
-                    if len(err_list) > 50:
-                        f.write(f"  .
+            logger.info('Report saved: %s', rp)
+        except Exception as e:
+            logger.error('Report error: %s', e)
