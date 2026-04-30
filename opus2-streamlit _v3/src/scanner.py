@@ -1,6 +1,7 @@
 # ============================================================
 # FILE: src/scanner.py
 # ============================================================
+
 """
 Image and Video Scanner v2.2
 Single image load optimization
