@@ -3,7 +3,7 @@
 # ============================================================
 
 scan:
-  folder_path: "C:\\Users\\YourUser\\Pictures"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\facebook"
   recursive: true
   extensions:
     images: [jpg, jpeg, png, gif, bmp, tiff, tif, webp, heic, heif, raw, cr2, nef, arw, dng]
@@ -21,11 +21,11 @@ duplicates:
   selection_criteria: [quality, resolution, date, size]
 
 organization:
-  output_folder: "C:\\Users\\YourUser\\Pictures\\Organized"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
   day_threshold: 60
   use_exif_date: true
   operation: "copy"
-  conflict_resolution: "rename"
+  conflict_resolution: "overwrite"
   reuse_existing_folders: true
   video_subfolder: true
 
@@ -62,7 +62,7 @@ organization:
   # Options: true | false
   #   true  = auto-detect screenshots by screen resolution + no EXIF
   #           also detects by filename keywords (screenshot, capture, snip)
-  #           puts them in: screenshots-XXpic/ or YYYY-MM-screenshots-XXpic/
+  #           puts them in: screetruenshots-XXpic/ or YYYY-MM-screenshots-XXpic/
   #   false = treat screenshots like normal photos
   separate_screenshots: true
 
@@ -92,7 +92,7 @@ face_detection:
   method: "opencv"
 
 thumbnails:
-  enabled: true
+  enabled: false
   size: [150, 100]
   output_folder: "./thumbnails"
   embed_in_excel: false
