@@ -1,7 +1,4 @@
-# ============================================================
-# FILE: main.py
-# ============================================================
-"""Image Scanner v2.5 - Added structure converter option"""
+"""Image Scanner v2.5"""
 
 import sys
 import logging
@@ -251,7 +248,6 @@ def task_3(ep, config, logger):
 
 
 def task_7(config, logger):
-    """Convert folder structure between flat / year-month / year-month-day."""
     print('\n  TASK 7: CONVERT FOLDER STRUCTURE')
     print('  ' + '=' * 50)
 
@@ -264,18 +260,41 @@ def task_7(config, logger):
 
     print('')
     print('  Target structures:')
-    print('    1. flat')
-    print('       Example: Organized/2022-01-30-010pic-beach/')
     print('')
-    print('    2. year-month')
-    print('       Example: Organized/2022/01-Jan/2022-01-30-010pic-beach/')
+    print('    1. flat')
+    print('       Organized/')
+    print('         2022-01-30-010pic-beach/')
+    print('         2022-03-00-025pic/')
+    print('         2024-03-screenshots-045pic/')
+    print('         undated-005pic/')
+    print('')
+    print('    2. year-month-date')
+    print('       Organized/')
+    print('         2022/')
+    print('           01-Jan/')
+    print('             2022-01-30-010pic-beach/')
+    print('           03-Mar/')
+    print('             2022-03-00-025pic/')
+    print('         2024/')
+    print('           03-Mar/')
+    print('             2024-03-screenshots-045pic/')
+    print('         undated-005pic/')
     print('')
     print('    3. year-month-day')
-    print('       Example: Organized/2022/01-Jan/30-010pic-beach/')
+    print('       Organized/')
+    print('         2022/')
+    print('           01-Jan/')
+    print('             30-010pic-beach/')
+    print('           03-Mar/')
+    print('             00-025pic/')
+    print('         2024/')
+    print('           03-Mar/')
+    print('             screenshots-045pic/')
+    print('         undated-005pic/')
     print('')
 
     ch = input('  Select target (1/2/3): ').strip()
-    targets = {'1': 'flat', '2': 'year-month', '3': 'year-month-day'}
+    targets = {'1': 'flat', '2': 'year-month-date', '3': 'year-month-day'}
     target = targets.get(ch)
     if not target:
         print('  Invalid choice')
@@ -284,12 +303,11 @@ def task_7(config, logger):
     print('')
     print('  Convert to: ' + target)
 
-    # Ask for separate output or in-place
     out = input('  Output folder (Enter=in-place): ').strip()
     target_folder = out if out else None
 
     print('')
-    if input('  Confirm conversion? (yes/no): ').strip().lower() != 'yes':
+    if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
         print('  Cancelled')
         return
 
@@ -309,6 +327,7 @@ def main():
 
         print('  Config: ' + str(config.config_path))
         print('  Scan: ' + str(config.get('scan.folder_path')))
+        print('  Structure: ' + str(config.get('organization.folder_structure', 'flat')))
 
         ft = []
         for k, n in [

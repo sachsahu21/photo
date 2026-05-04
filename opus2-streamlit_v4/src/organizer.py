@@ -1,8 +1,3 @@
-# ============================================================
-# FILE: src/organizer.py
-# ============================================================
-"""Image Organizer v2.5 - Fixed folder rename + structure converter"""
-
 import re
 import shutil
 import logging
@@ -25,7 +20,7 @@ MONTH_NAMES = {
     9: '09-Sep', 10: '10-Oct', 11: '11-Nov', 12: '12-Dec'
 }
 
-SCREEN_RES = {
+DEFAULT_SCREEN_RES = {
     (1080, 1920), (1080, 2340), (1080, 2400), (1080, 2520),
     (1170, 2532), (1179, 2556), (1284, 2778), (1290, 2796),
     (1440, 2560), (1440, 3040), (1440, 3200), (750, 1334),
@@ -34,16 +29,40 @@ SCREEN_RES = {
     (1536, 2048), (2160, 1620), (2388, 1668), (2732, 2048), (2048, 1536),
 }
 
-RE_PIC = re.compile('^(.*?)-(\\d+)pic(.*)' + chr(36))
+_END = chr(36)
+
+RE_PIC = re.compile('^(.*?)-(\\d+)pic(.*)' + _END)
 RE_DAY = re.compile('^\\d{4}-\\d{2}-(\\d{2})(.*)')
 RE_LOC = re.compile('[^a-z0-9]+')
-RE_SS = re.compile('screenshot|screen_shot|screen-shot|capture|snip', re.IGNORECASE)
 RE_DATE_PREFIX = re.compile('^(\\d{4})-(\\d{2})-(\\d{2})(.*)')
 RE_MONTH_PREFIX = re.compile('^(\\d{4})-(\\d{2})-00(.*)')
+RE_YEAR_DIR = re.compile('^\\d{4}' + _END)
+RE_MONTH_DIR = re.compile('^(\\d{2})')
+RE_DAY_DIR = re.compile('^(\\d{2})-(.*)')
+RE_SS_FOLDER = re.compile('screenshot', re.IGNORECASE)
+
+
+def _build_ss_regex(keywords):
+    if not keywords:
+        return re.compile('screenshot|screen_shot|screen-shot|capture|snip', re.IGNORECASE)
+    escaped = [re.escape(k) for k in keywords]
+    pattern = '|'.join(escaped)
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def _build_screen_res(custom_res):
+    res = set(DEFAULT_SCREEN_RES)
+    if custom_res:
+        for item in custom_res:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                try:
+                    res.add((int(item[0]), int(item[1])))
+                except (ValueError, TypeError):
+                    pass
+    return res
 
 
 def _count_files(fp):
-    """Count all files in folder including videos subfolder."""
     try:
         fp = Path(fp)
         if not fp.exists():
@@ -73,17 +92,24 @@ class ImageOrganizer:
         self.show = config.get('processing', {}).get('show_progress', True)
         self.structure = org.get('folder_structure', 'flat')
         self.sep_ss = org.get('separate_screenshots', True)
+
+        ss_keywords = org.get('screenshot_keywords', None)
+        self.re_ss = _build_ss_regex(ss_keywords)
+        self.ss_by_res = org.get('screenshot_detect_by_resolution', True)
+        custom_res = org.get('screenshot_custom_resolutions', [])
+        self.screen_res = _build_screen_res(custom_res)
+
         ensure_directory(self.output)
         self._cache = None
-
-    # ── Screenshot detection ──
 
     def _is_ss(self, rec):
         if not self.sep_ss:
             return False
         fn = str(rec.get('filename') or rec.get('Filename') or '')
-        if RE_SS.search(fn):
+        if self.re_ss.search(fn):
             return True
+        if not self.ss_by_res:
+            return False
         w = rec.get('width') or rec.get('Width (px)')
         h = rec.get('height') or rec.get('Height (px)')
         he = rec.get('has_exif') or rec.get('Has EXIF')
@@ -91,34 +117,35 @@ class ImageOrganizer:
         if w and h:
             try:
                 iw, ih = int(w), int(h)
-                if (iw, ih) in SCREEN_RES or (ih, iw) in SCREEN_RES:
+                if (iw, ih) in self.screen_res or (ih, iw) in self.screen_res:
                     if not he or ms in ('No EXIF', 'Minimal EXIF'):
                         return True
             except (ValueError, TypeError):
                 pass
         return False
 
-    # ── Scan existing folders ──
-
     def _scan_ex(self):
-        cache = {'daily': {}, 'monthly': {}}
+        cache = {'daily': {}, 'monthly': {}, 'screenshot': {}}
         if not self.output.exists():
             return cache
         try:
-            # For flat, scan direct children
-            # For nested, scan all subdirs
             if self.structure == 'flat':
                 items = list(self.output.iterdir())
             else:
                 items = list(self.output.rglob('*'))
-
             for item in items:
                 if not item.is_dir():
                     continue
-                # Skip 'videos' subfolder
                 if item.name == 'videos':
                     continue
                 name = item.name
+                if RE_SS_FOLDER.search(name):
+                    cache['screenshot'][name] = {
+                        'name': name,
+                        'full_path': str(item),
+                        'count': _count_files(item),
+                    }
+                    continue
                 dp = is_valid_date_folder(name)
                 if dp and dp not in cache['daily']:
                     cache['daily'][dp] = {
@@ -137,8 +164,6 @@ class ImageOrganizer:
         except Exception as e:
             logger.warning('Scan error: %s', e)
         return cache
-
-    # ── Folder name builders ──
 
     def _build_fn(self, dk, cnt, loc=''):
         pp = format_pic_count(cnt)
@@ -161,10 +186,8 @@ class ImageOrganizer:
         mc = Counter(locs).most_common(1)[0]
         return mc[0] if mc[1] >= len(recs) * 0.3 else ''
 
-    # ── Destination path based on structure ──
-
     def _dest(self, fn, dt, ft):
-        if self.structure == 'year-month' and dt:
+        if self.structure == 'year-month-date' and dt:
             d = self.output / str(dt.year) / MONTH_NAMES.get(dt.month, str(dt.month).zfill(2)) / fn
         elif self.structure == 'year-month-day' and dt:
             m = RE_DAY.match(fn)
@@ -179,8 +202,6 @@ class ImageOrganizer:
             d = d / 'videos'
         return d
 
-    # ── Find existing folder for a date key ──
-
     def _find_ex(self, dk):
         if not self.reuse or not self._cache:
             return None
@@ -191,7 +212,13 @@ class ImageOrganizer:
             return self._cache['monthly'].get(dk)
         return None
 
-    # ── Extract date from record ──
+    def _find_ss_ex(self, ss_key):
+        if not self.reuse or not self._cache:
+            return None
+        for name, data in self._cache['screenshot'].items():
+            if ss_key in name:
+                return data
+        return None
 
     def _date(self, r):
         if self.use_exif:
@@ -209,59 +236,37 @@ class ImageOrganizer:
                     return dt
         return None
 
-    # ── Rename existing folder with updated count ──
-
     def _rename_existing_folder(self, ex, new_total):
-        """
-        Rename existing folder to update the pic count.
-        Returns the NEW folder name and NEW full path.
-        Example: 2022-01-30-010pic -> 2022-01-30-020pic
-        """
         old_path = Path(ex['full_path'])
         old_name = ex['name']
-
         m = RE_PIC.match(old_name)
         if not m:
-            # No pic count in name, can't rename
             return old_name, str(old_path)
-
         old_count = int(m.group(2))
         if old_count == new_total:
-            # Count already correct
             return old_name, str(old_path)
-
-        # Build new name with updated count
         new_name = m.group(1) + '-' + format_pic_count(new_total) + m.group(3)
         new_path = old_path.parent / new_name
-
-        # If new path already exists and is different folder, skip rename
         if new_path.exists() and str(new_path) != str(old_path):
             logger.warning('Cannot rename %s -> %s: target exists', old_name, new_name)
             return old_name, str(old_path)
-
         if new_name == old_name:
             return old_name, str(old_path)
-
         try:
             old_path.rename(new_path)
             logger.info('Renamed folder: %s -> %s', old_name, new_name)
             print('    Renamed: ' + old_name + ' -> ' + new_name)
-
-            # Update cache
-            for cache_type in ('daily', 'monthly'):
+            for cache_type in ('daily', 'monthly', 'screenshot'):
                 for dk, cached in self._cache[cache_type].items():
                     if cached['full_path'] == str(old_path):
                         cached['name'] = new_name
                         cached['full_path'] = str(new_path)
                         cached['count'] = new_total
                         break
-
             return new_name, str(new_path)
         except Exception as e:
             logger.error('Rename failed %s -> %s: %s', old_name, new_name, e)
             return old_name, str(old_path)
-
-    # ── Main organize entry ──
 
     def organize(self, records):
         if not records:
@@ -282,7 +287,6 @@ class ImageOrganizer:
                 ss.append(r)
             else:
                 normal.append(r)
-
         logger.info('Organizing: %d normal, %d ss, %d skip', len(normal), len(ss), skip)
         mv = []
         if ss:
@@ -294,8 +298,6 @@ class ImageOrganizer:
         self._report(mv)
         return mv
 
-    # ── Organize screenshots ──
-
     def _org_ss(self, ss):
         mv = []
         mg = defaultdict(list)
@@ -304,11 +306,28 @@ class ImageOrganizer:
             mg[dt.strftime('%Y-%m') if dt else 'undated'].append((rec, dt))
 
         for mk, grp in mg.items():
-            fn = ('screenshots-' if mk == 'undated' else mk + '-screenshots-') + format_pic_count(len(grp))
+            new_count = len(grp)
+            if mk == 'undated':
+                ss_key = 'screenshots'
+                base_fn = 'screenshots-' + format_pic_count(new_count)
+            else:
+                ss_key = mk + '-screenshots'
+                base_fn = mk + '-screenshots-' + format_pic_count(new_count)
+
+            ex = self._find_ss_ex(ss_key)
+            if ex:
+                existing_count = ex.get('count', 0)
+                new_total = existing_count + new_count
+                fn, dest_base = self._rename_existing_folder(ex, new_total)
+                logger.info('Adding %d screenshots to %s (was %d, now %d)',
+                            new_count, fn, existing_count, new_total)
+            else:
+                fn = base_fn
+
             sdt = grp[0][1]
             for rec, dt in tqdm(grp, desc='  ' + fn, disable=not self.show):
                 ft = rec.get('file_type', '')
-                if self.structure in ('year-month', 'year-month-day') and sdt:
+                if self.structure in ('year-month-date', 'year-month-day') and sdt:
                     dd = self.output / str(sdt.year) / MONTH_NAMES.get(sdt.month, str(sdt.month).zfill(2)) / fn
                 else:
                     dd = self.output / fn
@@ -317,15 +336,12 @@ class ImageOrganizer:
                 mv.append(self._cp(rec, dd, fn))
         return mv
 
-    # ── Organize normal files ──
-
     def _org_normal(self, records):
         mv = []
         dated = [(r, self._date(r)) for r in records]
         dc = defaultdict(int)
         dr = defaultdict(list)
         undated = []
-
         for rec, dt in dated:
             if dt:
                 dk = dt.strftime('%Y%m%d')
@@ -333,7 +349,6 @@ class ImageOrganizer:
                 dr[dk].append((rec, dt))
             else:
                 undated.append((rec, None))
-
         daily = set()
         monthly = defaultdict(list)
         for dk, c in dc.items():
@@ -342,56 +357,40 @@ class ImageOrganizer:
             else:
                 monthly[dk[:6]].extend(dr[dk])
 
-        # ── Process daily folders ──
         for dk in sorted(daily):
             g = dr[dk]
             sdt = g[0][1]
             ds = sdt.strftime('%Y-%m-%d')
             loc = self._get_loc([r for r, _ in g])
             ex = self._find_ex(ds)
-
             if ex:
-                # EXISTING folder found — rename it FIRST with updated count
                 existing_count = ex.get('count', 0)
                 new_total = existing_count + len(g)
-
                 fn, dest_base = self._rename_existing_folder(ex, new_total)
-
-                # Now dest_base points to the renamed folder
-                logger.info('Adding %d files to existing folder: %s (was %d, now %d)',
-                            len(g), fn, existing_count, new_total)
+                logger.info('Adding %d to %s (was %d, now %d)', len(g), fn, existing_count, new_total)
             else:
-                # NEW folder
                 fn = self._build_fn(ds, len(g), loc)
-
             for rec, dt in tqdm(g, desc='  ' + fn, disable=not self.show):
                 ft = rec.get('file_type') or rec.get('Type') or ''
                 mv.append(self._cp(rec, self._dest(fn, dt, ft), fn))
 
-        # ── Process monthly folders ──
         for mk in sorted(monthly):
             g = monthly[mk]
             sdt = g[0][1]
             ds = sdt.strftime('%Y-%m') + '-00'
             loc = self._get_loc([r for r, _ in g])
             ex = self._find_ex(ds)
-
             if ex:
                 existing_count = ex.get('count', 0)
                 new_total = existing_count + len(g)
-
                 fn, dest_base = self._rename_existing_folder(ex, new_total)
-
-                logger.info('Adding %d files to existing folder: %s (was %d, now %d)',
-                            len(g), fn, existing_count, new_total)
+                logger.info('Adding %d to %s (was %d, now %d)', len(g), fn, existing_count, new_total)
             else:
                 fn = self._build_fn(ds, len(g), loc)
-
             for rec, dt in tqdm(g, desc='  ' + fn, disable=not self.show):
                 ft = rec.get('file_type') or rec.get('Type') or ''
                 mv.append(self._cp(rec, self._dest(fn, dt, ft), fn))
 
-        # ── Undated ──
         if undated:
             fn = 'undated-' + format_pic_count(len(undated))
             for rec, dt in tqdm(undated, desc='  ' + fn, disable=not self.show):
@@ -399,13 +398,9 @@ class ImageOrganizer:
                 if self.vid_sub and rec.get('file_type') == 'video':
                     dd = dd / 'videos'
                 mv.append(self._cp(rec, dd, fn))
-
         return mv
 
-    # ── Fix counts after all copies ──
-
     def _fix_counts(self, mv):
-        """After all files copied, verify actual file count matches folder name."""
         fc = defaultdict(int)
         for m in mv:
             if m['status'] == 'Success' and m.get('destination'):
@@ -413,7 +408,6 @@ class ImageOrganizer:
                 if p.name == 'videos':
                     p = p.parent
                 fc[str(p)] += 1
-
         for fs in fc:
             fp = Path(fs)
             if not fp.exists():
@@ -426,7 +420,6 @@ class ImageOrganizer:
             old_count = int(m.group(2))
             if old_count == actual:
                 continue
-
             nn = m.group(1) + '-' + format_pic_count(actual) + m.group(3)
             np2 = fp.parent / nn
             if (np2.exists() and str(np2) != str(fp)) or nn == old:
@@ -441,8 +434,6 @@ class ImageOrganizer:
                         x['folder'] = nn
             except Exception as e:
                 logger.warning('Count fix failed: %s', e)
-
-    # ── Copy/Move single file ──
 
     def _cp(self, rec, dest_dir, fl):
         src = rec.get('full_path') or rec.get('Full Path') or ''
@@ -469,8 +460,6 @@ class ImageOrganizer:
         except Exception as e:
             return {'filename': source.name, 'source': str(source),
                     'destination': str(dest), 'status': 'Error: ' + str(e), 'folder': fl}
-
-    # ── Report ──
 
     def _report(self, mv):
         try:
@@ -500,215 +489,210 @@ class ImageOrganizer:
         except Exception:
             pass
 
-    # ══════════════════════════════════════════════════════════
-    # STRUCTURE CONVERTER
-    # ══════════════════════════════════════════════════════════
-
     @staticmethod
     def convert_structure(source_folder, target_structure, target_folder=None):
-        """
-        Convert existing organized folders from one structure to another.
-
-        Args:
-            source_folder: Path to current organized folder
-            target_structure: "flat" | "year-month" | "year-month-day"
-            target_folder: Output path (None = rename in place)
-
-        Conversions supported:
-            flat -> year-month:
-                2022-01-30-010pic-beach/ -> 2022/01-Jan/2022-01-30-010pic-beach/
-            flat -> year-month-day:
-                2022-01-30-010pic-beach/ -> 2022/01-Jan/30-010pic-beach/
-            year-month -> flat:
-                2022/01-Jan/2022-01-30-010pic/ -> 2022-01-30-010pic/
-            year-month -> year-month-day:
-                2022/01-Jan/2022-01-30-010pic/ -> 2022/01-Jan/30-010pic/
-            year-month-day -> flat:
-                2022/01-Jan/30-010pic/ -> 2022-01-30-010pic/  (reconstructed)
-            year-month-day -> year-month:
-                2022/01-Jan/30-010pic/ -> 2022/01-Jan/2022-01-30-010pic/
-        """
         source = Path(source_folder)
         if not source.exists():
-            print('  Error: Source folder not found: ' + str(source))
+            print('  Error: Source not found: ' + str(source))
             return False
-
-        if target_folder:
-            dest = Path(target_folder)
-        else:
-            dest = source
-
-        if target_structure not in ('flat', 'year-month', 'year-month-day'):
-            print('  Error: Invalid target structure: ' + target_structure)
+        dest = Path(target_folder) if target_folder else source
+        if target_structure not in ('flat', 'year-month-date', 'year-month-day'):
+            print('  Error: Invalid target: ' + target_structure)
             return False
-
-        # Detect current structure
         current = _detect_structure(source)
-        print('  Current structure: ' + current)
-        print('  Target structure:  ' + target_structure)
-
+        print('  Detected current: ' + current)
+        print('  Target:           ' + target_structure)
         if current == target_structure:
             print('  Already in target structure!')
             return True
-
-        # Collect all dated folders with their files
         folders = _collect_folders(source, current)
         if not folders:
-            print('  No dated folders found!')
+            print('  No folders found to convert!')
             return False
-
         print('  Found ' + str(len(folders)) + ' folders to convert')
-
         if target_folder and str(dest) != str(source):
             ensure_directory(dest)
-
         moved = 0
         errors = 0
-
         for fd in tqdm(folders, desc='  Converting', disable=False):
             old_path = Path(fd['path'])
             folder_name = fd['name']
-            year = fd.get('year')
-            month = fd.get('month')
-            day = fd.get('day')
+            year = fd.get('year', '')
+            month = fd.get('month', '')
+            day = fd.get('day', '00')
+            new_path = None
 
-            # Build new path based on target structure
-            if target_structure == 'flat':
-                # Reconstruct full date name
-                if day and day != '00':
-                    # From year-month-day: 30-010pic -> 2022-01-30-010pic
-                    if not folder_name.startswith(str(year)):
-                        new_name = str(year) + '-' + str(month).zfill(2) + '-' + folder_name
-                    else:
-                        new_name = folder_name
+            if year == 'misc':
+                if target_folder and str(dest) != str(source):
+                    new_path = dest / folder_name
                 else:
-                    new_name = folder_name
+                    continue
+
+            elif target_structure == 'flat':
+                new_name = _to_flat_name(folder_name, year, month, day)
                 new_path = dest / new_name
 
-            elif target_structure == 'year-month':
+            elif target_structure == 'year-month-date':
                 month_name = MONTH_NAMES.get(int(month), str(month).zfill(2))
-                # If from year-month-day, reconstruct: 30-010pic -> 2022-01-30-010pic
-                if day and day != '00' and not folder_name.startswith(str(year)):
-                    new_name = str(year) + '-' + str(month).zfill(2) + '-' + folder_name
-                else:
-                    new_name = folder_name
+                new_name = _to_year_month_date_name(folder_name, year, month, day)
                 new_path = dest / str(year) / month_name / new_name
 
             elif target_structure == 'year-month-day':
                 month_name = MONTH_NAMES.get(int(month), str(month).zfill(2))
-                # Strip date prefix: 2022-01-30-010pic -> 30-010pic
-                dm = RE_DATE_PREFIX.match(folder_name)
-                if dm:
-                    new_name = dm.group(3).lstrip('-')  # day part + rest
-                    if not new_name.startswith(dm.group(3)):
-                        new_name = dm.group(3) + '-' + new_name if new_name else dm.group(3)
-                    # Ensure day is prefix
-                    new_name = day + '-' + new_name.lstrip(day).lstrip('-') if day else new_name
-                    # Clean up
-                    new_name = re.sub('^-+', '', new_name)
-                    if not new_name:
-                        new_name = folder_name
-                    # Make sure day is at start
-                    if not new_name.startswith(day):
-                        new_name = day + '-' + new_name
-                else:
-                    mm = RE_MONTH_PREFIX.match(folder_name)
-                    if mm:
-                        rest = mm.group(3).lstrip('-')
-                        new_name = '00-' + rest if rest else '00'
-                    else:
-                        new_name = folder_name
+                new_name = _to_year_month_day_name(folder_name, year, month, day)
                 new_path = dest / str(year) / month_name / new_name
 
-            if new_path == old_path:
+            if new_path is None or new_path == old_path:
                 continue
 
-            # Move folder
             try:
                 ensure_directory(new_path.parent)
                 if new_path.exists():
-                    # Merge: move files from old into existing new
-                    for item in old_path.iterdir():
-                        target_item = new_path / item.name
-                        if item.is_dir():
-                            if target_item.exists():
-                                # Merge subdirectory
-                                for sub in item.iterdir():
-                                    st = target_item / sub.name
-                                    if not st.exists():
-                                        shutil.move(str(sub), str(st))
-                                # Remove empty old subdir
-                                try:
-                                    item.rmdir()
-                                except Exception:
-                                    pass
-                            else:
-                                shutil.move(str(item), str(target_item))
-                        else:
-                            if not target_item.exists():
-                                shutil.move(str(item), str(target_item))
-                    # Remove old folder if empty
-                    try:
-                        old_path.rmdir()
-                    except Exception:
-                        pass
+                    _merge_folders(old_path, new_path)
                 else:
                     shutil.move(str(old_path), str(new_path))
                 moved += 1
-                logger.info('Converted: %s -> %s', str(old_path), str(new_path))
             except Exception as e:
                 errors += 1
                 logger.error('Convert error %s: %s', old_path, e)
 
-        # Clean up empty parent directories
         _cleanup_empty_dirs(source)
         if target_folder and str(dest) != str(source):
             _cleanup_empty_dirs(dest)
-
         print('  Converted: ' + str(moved) + ' folders, ' + str(errors) + ' errors')
         return True
 
 
-def _detect_structure(folder):
-    """Detect whether folder uses flat, year-month, or year-month-day structure."""
-    folder = Path(folder)
+def _to_flat_name(folder_name, year, month, day):
+    if folder_name.startswith(str(year) + '-'):
+        return folder_name
+    if RE_SS_FOLDER.search(folder_name):
+        if not folder_name.startswith(str(year)):
+            return str(year) + '-' + str(month).zfill(2) + '-' + folder_name
+        return folder_name
+    if day and day != '00':
+        return str(year) + '-' + str(month).zfill(2) + '-' + day + '-' + folder_name.lstrip(day).lstrip('-')
+    return str(year) + '-' + str(month).zfill(2) + '-00-' + folder_name
 
-    # Check for year directories (2020, 2021, etc.)
-    has_year_dirs = False
-    has_flat_dated = False
+
+def _to_year_month_date_name(folder_name, year, month, day):
+    if folder_name.startswith(str(year) + '-'):
+        return folder_name
+    if RE_SS_FOLDER.search(folder_name):
+        if not folder_name.startswith(str(year)):
+            return str(year) + '-' + str(month).zfill(2) + '-' + folder_name
+        return folder_name
+    if day and day != '00':
+        dm = RE_DAY_DIR.match(folder_name)
+        if dm:
+            return str(year) + '-' + str(month).zfill(2) + '-' + folder_name
+        return str(year) + '-' + str(month).zfill(2) + '-' + day + '-' + folder_name
+    return folder_name
+
+
+def _to_year_month_day_name(folder_name, year, month, day):
+    dm = RE_DATE_PREFIX.match(folder_name)
+    if dm:
+        rest = dm.group(4)
+        if rest:
+            rest = rest.lstrip('-')
+        if rest:
+            return dm.group(3) + '-' + rest
+        else:
+            return dm.group(3)
+    mm = RE_MONTH_PREFIX.match(folder_name)
+    if mm:
+        rest = mm.group(3)
+        if rest:
+            rest = rest.lstrip('-')
+        if rest:
+            return '00-' + rest
+        else:
+            return '00'
+    if RE_SS_FOLDER.search(folder_name):
+        if folder_name.startswith(str(year)):
+            dm2 = re.match('^\\d{4}-\\d{2}-(.*)', folder_name)
+            if dm2:
+                return dm2.group(1)
+        return folder_name
+    return folder_name
+
+
+def _merge_folders(old_path, new_path):
+    for item in old_path.iterdir():
+        target_item = new_path / item.name
+        if item.is_dir():
+            if target_item.exists():
+                for sub in item.iterdir():
+                    st = target_item / sub.name
+                    if not st.exists():
+                        shutil.move(str(sub), str(st))
+                try:
+                    item.rmdir()
+                except Exception:
+                    pass
+            else:
+                shutil.move(str(item), str(target_item))
+        else:
+            if not target_item.exists():
+                shutil.move(str(item), str(target_item))
+    try:
+        old_path.rmdir()
+    except Exception:
+        pass
+
+
+def _detect_structure(folder):
+    folder = Path(folder)
+    flat_score = 0
+    nested_score = 0
+    nested_type = 'year-month-date'
 
     for item in folder.iterdir():
         if not item.is_dir():
             continue
         name = item.name
-        # Year directory?
-        if re.match('^\\d{4}', name):
-            has_year_dirs = True
-            # Check inside year for month dirs
-            for sub in item.iterdir():
-                if sub.is_dir():
-                    # Check inside month for day-prefixed dirs
-                    for subsub in sub.iterdir():
-                        if subsub.is_dir():
-                            # Does it start with DD- (day prefix)?
-                            if re.match('^\\d{2}-', subsub.name) and not re.match('^\\d{4}-', subsub.name):
-                                return 'year-month-day'
-                            elif re.match('^\\d{4}-\\d{2}-', subsub.name):
-                                return 'year-month'
-            continue
-        # Flat dated folder?
-        if is_valid_date_folder(name) or is_valid_month_folder(name):
-            has_flat_dated = True
 
-    if has_year_dirs:
-        return 'year-month'
-    if has_flat_dated:
+        if RE_YEAR_DIR.match(name):
+            nested_score += 10
+            for month_dir in item.iterdir():
+                if not month_dir.is_dir():
+                    continue
+                for leaf in month_dir.iterdir():
+                    if not leaf.is_dir():
+                        continue
+                    if leaf.name == 'videos':
+                        continue
+                    if RE_DATE_PREFIX.match(leaf.name):
+                        nested_type = 'year-month-date'
+                        nested_score += 5
+                    elif RE_DAY_DIR.match(leaf.name):
+                        nested_type = 'year-month-day'
+                        nested_score += 5
+                    elif RE_SS_FOLDER.search(leaf.name):
+                        nested_score += 1
+            continue
+
+        if is_valid_date_folder(name) or is_valid_month_folder(name):
+            flat_score += 10
+            continue
+
+        if RE_SS_FOLDER.search(name):
+            flat_score += 2
+            continue
+
+        if name.startswith('undated'):
+            flat_score += 1
+            continue
+
+    if flat_score > nested_score:
         return 'flat'
+    elif nested_score > 0:
+        return nested_type
     return 'flat'
 
 
 def _collect_folders(source, structure):
-    """Collect all dated folders with metadata."""
     source = Path(source)
     folders = []
 
@@ -732,18 +716,25 @@ def _collect_folders(source, structure):
                     'year': parts[0], 'month': parts[1], 'day': '00',
                 })
                 continue
-            # Screenshots, undated etc - include as-is
+            ss_match = re.match('^(\\d{4})-(\\d{2})-(.*)', item.name)
+            if ss_match and RE_SS_FOLDER.search(item.name):
+                folders.append({
+                    'path': str(item), 'name': item.name,
+                    'year': ss_match.group(1), 'month': ss_match.group(2), 'day': '00',
+                })
+                continue
             if item.name.startswith('screenshot') or item.name.startswith('undated'):
                 folders.append({
                     'path': str(item), 'name': item.name,
                     'year': 'misc', 'month': '00', 'day': '00',
                 })
 
-    elif structure == 'year-month':
+    elif structure == 'year-month-date':
         for year_dir in sorted(source.iterdir()):
-            if not year_dir.is_dir() or not re.match('^\\d{4}', year_dir.name):
-                # Non-year dirs (undated, screenshots)
-                if year_dir.is_dir() and year_dir.name != 'videos':
+            if not year_dir.is_dir():
+                continue
+            if not RE_YEAR_DIR.match(year_dir.name):
+                if year_dir.name != 'videos':
                     folders.append({
                         'path': str(year_dir), 'name': year_dir.name,
                         'year': 'misc', 'month': '00', 'day': '00',
@@ -753,27 +744,27 @@ def _collect_folders(source, structure):
             for month_dir in sorted(year_dir.iterdir()):
                 if not month_dir.is_dir():
                     continue
-                # Extract month number from "01-Jan" format
-                mm = re.match('^(\\d{2})', month_dir.name)
+                mm = RE_MONTH_DIR.match(month_dir.name)
                 month = mm.group(1) if mm else '00'
-                for folder in sorted(month_dir.iterdir()):
-                    if not folder.is_dir() or folder.name == 'videos':
+                for leaf in sorted(month_dir.iterdir()):
+                    if not leaf.is_dir() or leaf.name == 'videos':
                         continue
-                    dp = is_valid_date_folder(folder.name)
+                    dp = is_valid_date_folder(leaf.name)
                     if dp:
-                        parts = dp.split('-')
-                        day = parts[2]
+                        day = dp.split('-')[2]
                     else:
                         day = '00'
                     folders.append({
-                        'path': str(folder), 'name': folder.name,
+                        'path': str(leaf), 'name': leaf.name,
                         'year': year, 'month': month, 'day': day,
                     })
 
     elif structure == 'year-month-day':
         for year_dir in sorted(source.iterdir()):
-            if not year_dir.is_dir() or not re.match('^\\d{4}', year_dir.name):
-                if year_dir.is_dir() and year_dir.name != 'videos':
+            if not year_dir.is_dir():
+                continue
+            if not RE_YEAR_DIR.match(year_dir.name):
+                if year_dir.name != 'videos':
                     folders.append({
                         'path': str(year_dir), 'name': year_dir.name,
                         'year': 'misc', 'month': '00', 'day': '00',
@@ -783,16 +774,15 @@ def _collect_folders(source, structure):
             for month_dir in sorted(year_dir.iterdir()):
                 if not month_dir.is_dir():
                     continue
-                mm = re.match('^(\\d{2})', month_dir.name)
+                mm = RE_MONTH_DIR.match(month_dir.name)
                 month = mm.group(1) if mm else '00'
-                for folder in sorted(month_dir.iterdir()):
-                    if not folder.is_dir() or folder.name == 'videos':
+                for leaf in sorted(month_dir.iterdir()):
+                    if not leaf.is_dir() or leaf.name == 'videos':
                         continue
-                    # Day-prefixed: "30-010pic-beach"
-                    dm = re.match('^(\\d{2})(.*)', folder.name)
+                    dm = RE_DAY_DIR.match(leaf.name)
                     day = dm.group(1) if dm else '00'
                     folders.append({
-                        'path': str(folder), 'name': folder.name,
+                        'path': str(leaf), 'name': leaf.name,
                         'year': year, 'month': month, 'day': day,
                     })
 
@@ -800,16 +790,13 @@ def _collect_folders(source, structure):
 
 
 def _cleanup_empty_dirs(folder):
-    """Remove empty directories recursively."""
     folder = Path(folder)
     try:
         for item in sorted(folder.rglob('*'), reverse=True):
             if item.is_dir():
                 try:
-                    # Only remove if truly empty
                     if not any(item.iterdir()):
                         item.rmdir()
-                        logger.debug('Removed empty dir: %s', item)
                 except Exception:
                     pass
     except Exception:

@@ -1,8 +1,3 @@
-# ============================================================
-# FILE: src/config_manager.py
-# ============================================================
-"""Configuration Manager v2.4"""
-
 import yaml
 import logging
 from pathlib import Path
@@ -34,18 +29,73 @@ class ConfigManager:
 
     def _defaults(self):
         return {
-            'scan': {'folder_path': './sample_images', 'recursive': True, 'extensions': {'images': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'heic', 'heif', 'raw', 'cr2', 'nef', 'arw', 'dng'], 'videos': ['mp4', 'mov', 'avi', 'mkv', '3gp', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'webm', 'mts']}},
+            'scan': {
+                'folder_path': './sample_images',
+                'recursive': True,
+                'extensions': {
+                    'images': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'heic', 'heif', 'raw', 'cr2', 'nef', 'arw', 'dng'],
+                    'videos': ['mp4', 'mov', 'avi', 'mkv', '3gp', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'webm', 'mts'],
+                },
+            },
             'blur_detection': {'enabled': True, 'threshold': 100},
-            'duplicates': {'enabled': True, 'hash_algorithm': 'md5', 'match_mode': 'exact', 'similarity_threshold': 90, 'selection_criteria': ['quality', 'resolution', 'date', 'size']},
-            'similar_detection': {'enabled': False, 'ahash': True, 'phash': True, 'dhash': True, 'color_histogram': False, 'sift': False, 'ahash_threshold': 10, 'phash_threshold': 10, 'dhash_threshold': 10, 'histogram_threshold': 0.85, 'sift_threshold': 30, 'hash_size': 8, 'max_compare_per_image': 200},
-            'organization': {'output_folder': './organized_images', 'day_threshold': 60, 'use_exif_date': True, 'operation': 'copy', 'conflict_resolution': 'rename', 'reuse_existing_folders': True, 'video_subfolder': True, 'folder_structure': 'flat', 'separate_screenshots': True},
-            'output': {'output_folder': './reports', 'filename_prefix': 'image-scan', 'sheets': {'all_images': True, 'blurry_images': True, 'duplicates': True, 'similar_images': True, 'summary': True, 'quality_report': True, 'analytics': True, 'clusters': True}},
-            'processing': {'threads': 0, 'show_progress': True, 'verbose': False, 'checkpoint_enabled': True, 'checkpoint_interval': 100, 'fast_mode': False, 'skip_video_hash': True},
+            'duplicates': {
+                'enabled': True, 'hash_algorithm': 'md5', 'match_mode': 'exact',
+                'similarity_threshold': 90,
+                'selection_criteria': ['quality', 'resolution', 'date', 'size'],
+            },
+            'similar_detection': {
+                'enabled': False, 'ahash': True, 'phash': True, 'dhash': True,
+                'color_histogram': False, 'sift': False,
+                'ahash_threshold': 10, 'phash_threshold': 10, 'dhash_threshold': 10,
+                'histogram_threshold': 0.85, 'sift_threshold': 30,
+                'hash_size': 8, 'max_compare_per_image': 200,
+            },
+            'organization': {
+                'output_folder': './organized_images',
+                'day_threshold': 60,
+                'use_exif_date': True,
+                'operation': 'copy',
+                'conflict_resolution': 'rename',
+                'reuse_existing_folders': True,
+                'video_subfolder': True,
+                'folder_structure': 'flat',
+                'separate_screenshots': True,
+                'screenshot_keywords': [
+                    'screenshot', 'screen_shot', 'screen-shot',
+                    'capture', 'snip', 'snipaste', 'sharex',
+                    'screen recording', 'screenrecording', 'printscreen',
+                ],
+                'screenshot_detect_by_resolution': True,
+                'screenshot_custom_resolutions': [],
+            },
+            'output': {
+                'output_folder': './reports',
+                'filename_prefix': 'image-scan',
+                'sheets': {
+                    'all_images': True, 'blurry_images': True, 'duplicates': True,
+                    'similar_images': True, 'summary': True, 'quality_report': True,
+                    'analytics': True, 'clusters': True,
+                },
+            },
+            'processing': {
+                'threads': 0, 'show_progress': True, 'verbose': False,
+                'checkpoint_enabled': True, 'checkpoint_interval': 100,
+                'fast_mode': False, 'skip_video_hash': True,
+            },
             'face_detection': {'enabled': False, 'method': 'opencv'},
-            'thumbnails': {'enabled': True, 'size': [150, 100], 'output_folder': './thumbnails', 'embed_in_excel': False},
-            'clustering': {'enabled': False, 'method': 'color_histogram', 'n_clusters': 10, 'min_cluster_size': 3},
+            'thumbnails': {
+                'enabled': True, 'size': [150, 100],
+                'output_folder': './thumbnails', 'embed_in_excel': False,
+            },
+            'clustering': {
+                'enabled': False, 'method': 'color_histogram',
+                'n_clusters': 10, 'min_cluster_size': 3,
+            },
             'geocoding': {'enabled': False, 'method': 'offline'},
-            'auto_tagging': {'enabled': False, 'model': 'mobilenet', 'top_k': 5, 'confidence_threshold': 0.3},
+            'auto_tagging': {
+                'enabled': False, 'model': 'mobilenet',
+                'top_k': 5, 'confidence_threshold': 0.3,
+            },
             'comparison': {'enabled': True, 'output_folder': './comparisons'},
             'analytics': {'enabled': True},
             'cloud': {'enabled': False, 'provider': 'none'},
@@ -85,8 +135,8 @@ class ConfigManager:
         elif not Path(sp).exists():
             errors.append('scan.folder_path not found: ' + str(sp))
         fs = self.get('organization.folder_structure', 'flat')
-        if fs not in ('flat', 'year-month', 'year-month-day'):
-            errors.append('Invalid folder_structure: ' + str(fs))
+        if fs not in ('flat', 'year-month-date', 'year-month-day'):
+            errors.append('Invalid folder_structure: ' + str(fs) + ' (use flat, year-month-date, or year-month-day)')
         if errors:
             print('\n  Config issues:')
             for e in errors:

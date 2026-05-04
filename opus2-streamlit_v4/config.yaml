@@ -345,6 +345,22 @@ organization:
   # Options: true | false
   separate_screenshots: true
 
+  screenshot_keywords:
+      - screenshot
+      - screen_shot
+      - screen-shot
+      - capture
+      - snip
+      - snipaste
+      - sharex
+      - screen recording
+      - screenrecording
+      - printscreen
+
+  screenshot_detect_by_resolution: true
+
+  screenshot_custom_resolutions: []
+
 
 # ============================================================
 # OUTPUT / EXCEL REPORT
@@ -417,7 +433,7 @@ processing:
   # Options: true | false
   #   true  = videos won't have hash, can't detect video duplicates
   #   false = hash every video (slow for large files)
-  skip_video_hash: true
+  skip_video_hash: falase
 
 
 # ============================================================
