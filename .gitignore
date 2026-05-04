@@ -44,3 +44,6 @@ records_backup.pkl
 output/
 *.xlsx
 *.csv
+# thumbnails/
+# logs/
+# comparisons/
