@@ -5,8 +5,10 @@ pip install pyenv
 
 python -m venv env 
 py -3.12 -m venv venv
-opus2-streamlit_v2\venv\Scripts\activate
+v2.1\venv\Scripts\activate
 venv\Scripts\activate
+
+..\v2.1\venv\Scripts\activate 
 deactivate
 
 pip install -r requirements.txt
@@ -16,8 +18,8 @@ python main.py
 <!-- -- -->
 
 working
-photo_manage - ( fast and basic)
-claude_v1 - working perfectly (basic setup and fast to run)
+v1 - ( fast and basic)
+v2 - working perfectly (basic setup and fast to run)
 opus-streamlit - working perfectly ( advanced takes more time )
 opus-streamlit_v2 - lighter version and fast ( advanced takes more time )
 opus-streamlit_v3 - folder format with pic number, screenshot and WA images
