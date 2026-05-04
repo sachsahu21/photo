@@ -1,54 +1,39 @@
-
 # ============================================================
 # FILE: src/checkpoint_manager.py
 # ============================================================
-"""Checkpoint Manager v2.3"""
-
-import json
-import logging
+"""Checkpoint Manager v2.4"""
+import json, logging
 from pathlib import Path
 logger = logging.getLogger(__name__)
-CHECKPOINT_FILE = '.scan_checkpoint.json'
-
 
 class CheckpointManager:
     def __init__(self, interval=100):
         self.interval = interval
         self.processed = set()
         self.count = 0
-
+        self._file = '.scan_checkpoint.json'
     def load(self):
         try:
-            p = Path(CHECKPOINT_FILE)
+            p = Path(self._file)
             if p.exists():
-                with open(p, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                self.processed = set(data.get('processed', []))
+                with open(p, 'r') as f:
+                    self.processed = set(json.load(f).get('processed', []))
                 return True
-        except Exception:
-            pass
+        except Exception: pass
         return False
-
     def save(self):
         try:
-            with open(CHECKPOINT_FILE, 'w', encoding='utf-8') as f:
+            with open(self._file, 'w') as f:
                 json.dump({'processed': list(self.processed)}, f)
-        except Exception:
-            pass
-
-    def mark_processed(self, filepath):
-        self.processed.add(filepath)
+        except Exception: pass
+    def mark_processed(self, fp):
+        self.processed.add(fp)
         self.count += 1
-        if self.count % self.interval == 0:
-            self.save()
-
-    def is_processed(self, filepath):
-        return filepath in self.processed
-
+        if self.count % self.interval == 0: self.save()
+    def is_processed(self, fp):
+        return fp in self.processed
     def clear(self):
         try:
-            p = Path(CHECKPOINT_FILE)
-            if p.exists():
-                p.unlink()
-        except Exception:
-            pass
+            p = Path(self._file)
+            if p.exists(): p.unlink()
+        except Exception: pass

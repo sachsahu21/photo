@@ -1,18 +1,15 @@
-
 # ============================================================
 # FILE: src/config_manager.py
 # ============================================================
-"""Configuration Manager v2.3"""
+"""Configuration Manager v2.4"""
 
 import yaml
 import logging
 from pathlib import Path
-
 logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
-
     def __init__(self, config_path='config.yaml'):
         self.config_path = self._resolve(config_path)
         self.config = {}
@@ -32,15 +29,12 @@ class ConfigManager:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 loaded = yaml.safe_load(f)
             self.config = loaded if isinstance(loaded, dict) else self._defaults()
-        except Exception as e:
-            logger.error('Config error: %s', e)
+        except Exception:
             self.config = self._defaults()
 
     def _defaults(self):
         return {
-            'scan': {'folder_path': './sample_images', 'recursive': True,
-                     'extensions': {'images': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'heic', 'heif', 'raw', 'cr2', 'nef', 'arw', 'dng'],
-                                    'videos': ['mp4', 'mov', 'avi', 'mkv', '3gp', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'webm', 'mts']}},
+            'scan': {'folder_path': './sample_images', 'recursive': True, 'extensions': {'images': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'heic', 'heif', 'raw', 'cr2', 'nef', 'arw', 'dng'], 'videos': ['mp4', 'mov', 'avi', 'mkv', '3gp', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'webm', 'mts']}},
             'blur_detection': {'enabled': True, 'threshold': 100},
             'duplicates': {'enabled': True, 'hash_algorithm': 'md5', 'match_mode': 'exact', 'similarity_threshold': 90, 'selection_criteria': ['quality', 'resolution', 'date', 'size']},
             'similar_detection': {'enabled': False, 'ahash': True, 'phash': True, 'dhash': True, 'color_histogram': False, 'sift': False, 'ahash_threshold': 10, 'phash_threshold': 10, 'dhash_threshold': 10, 'histogram_threshold': 0.85, 'sift_threshold': 30, 'hash_size': 8, 'max_compare_per_image': 200},
@@ -54,7 +48,7 @@ class ConfigManager:
             'auto_tagging': {'enabled': False, 'model': 'mobilenet', 'top_k': 5, 'confidence_threshold': 0.3},
             'comparison': {'enabled': True, 'output_folder': './comparisons'},
             'analytics': {'enabled': True},
-            'cloud': {'enabled': False, 'provider': 'none', 'bucket': '', 'prefix': '', 'credentials_path': ''},
+            'cloud': {'enabled': False, 'provider': 'none'},
             'streamlit': {'enabled': True, 'port': 8501},
             'logging': {'level': 'INFO', 'file': './logs/image-scanner.log', 'console': True},
         }
@@ -90,8 +84,6 @@ class ConfigManager:
             errors.append('scan.folder_path required')
         elif not Path(sp).exists():
             errors.append('scan.folder_path not found: ' + str(sp))
-        if not self.get('organization.output_folder'):
-            errors.append('organization.output_folder required')
         fs = self.get('organization.folder_structure', 'flat')
         if fs not in ('flat', 'year-month', 'year-month-day'):
             errors.append('Invalid folder_structure: ' + str(fs))

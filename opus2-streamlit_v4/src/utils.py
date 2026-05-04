@@ -1,8 +1,7 @@
-
 # ============================================================
-# FILE: src/utils.py
+# FILE: src/utils.py  (only format_pic_count added — include full file)
 # ============================================================
-"""Utility Functions v2.3"""
+"""Utility Functions v2.5"""
 
 import os
 import re
@@ -13,7 +12,6 @@ from pathlib import Path
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
 HASH_BUFFER_SIZE = 8 * 1024 * 1024
 _print_lock = threading.Lock()
 
@@ -28,10 +26,7 @@ def calculate_file_hash(filepath, algorithm='md5'):
         filepath = Path(filepath)
         if not filepath.exists():
             return ""
-        if algorithm == 'sha256':
-            hasher = hashlib.sha256()
-        else:
-            hasher = hashlib.md5()
+        hasher = hashlib.sha256() if algorithm == 'sha256' else hashlib.md5()
         with open(filepath, 'rb') as f:
             while True:
                 chunk = f.read(HASH_BUFFER_SIZE)
@@ -66,11 +61,10 @@ def parse_datetime_flexible(value):
     cleaned = str(value).strip().replace('\x00', '')
     if not cleaned:
         return None
-    formats = [
+    for fmt in [
         '%Y-%m-%d %H:%M:%S', '%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S',
         '%Y/%m/%d %H:%M:%S', '%d/%m/%Y %H:%M:%S', '%Y-%m-%d', '%Y:%m:%d',
-    ]
-    for fmt in formats:
+    ]:
         try:
             return datetime.strptime(cleaned, fmt)
         except (ValueError, TypeError):
@@ -92,10 +86,12 @@ def parse_gps_coordinates(gps_info):
     try:
         if not gps_info or not isinstance(gps_info, dict):
             return None, None
+
         def to_deg(v):
             if isinstance(v, (list, tuple)) and len(v) == 3:
                 return float(v[0]) + float(v[1]) / 60.0 + float(v[2]) / 3600.0
             return None
+
         lat = to_deg(gps_info.get(2))
         lon = to_deg(gps_info.get(4))
         if lat and str(gps_info.get(1, '')).strip().upper() == 'S':
@@ -149,63 +145,58 @@ def format_duration(seconds):
 
 
 def format_pic_count(count):
+    """Format count with minimum 3 digits: 1->001pic, 85->085pic, 120->120pic."""
     return str(count).zfill(3) + 'pic'
 
 
 def is_valid_date_folder(folder_name):
-    pattern = re.compile('^(\\d{4}-\\d{2}-\\d{2})')
-    match = pattern.match(str(folder_name))
-    if match:
-        date_str = match.group(1)
+    """Check if folder name starts with YYYY-MM-DD pattern."""
+    m = re.compile('^(\\d{4}-\\d{2}-\\d{2})').match(str(folder_name))
+    if m:
         try:
-            datetime.strptime(date_str, '%Y-%m-%d')
-            return date_str
+            datetime.strptime(m.group(1), '%Y-%m-%d')
+            return m.group(1)
         except ValueError:
-            return None
+            pass
     return None
 
 
 def is_valid_month_folder(folder_name):
-    pattern = re.compile('^(\\d{4}-\\d{2}-00)')
-    match = pattern.match(str(folder_name))
-    if match:
-        return match.group(1)
-    return None
+    """Check if folder name starts with YYYY-MM-00 pattern."""
+    m = re.compile('^(\\d{4}-\\d{2}-00)').match(str(folder_name))
+    return m.group(1) if m else None
 
 
 def determine_metadata_status(record):
     if record.get('error'):
         return 'Error'
-    file_type = record.get('file_type', '')
-    if file_type == 'video':
-        has_dur = record.get('video_duration_sec') is not None
-        has_res = record.get('video_width') is not None
-        if has_dur and has_res:
+    ft = record.get('file_type', '')
+    if ft == 'video':
+        hd = record.get('video_duration_sec') is not None
+        hr = record.get('video_width') is not None
+        if hd and hr:
             return 'Full Video Meta'
-        elif has_dur or has_res:
+        elif hd or hr:
             return 'Partial Video Meta'
         return 'No Video Meta'
-    if file_type == 'image':
+    if ft == 'image':
         if not record.get('has_exif'):
             return 'No EXIF'
-        exif_fields = ['camera_make', 'camera_model', 'date_taken',
-                       'focal_length', 'aperture', 'iso', 'exposure_time']
-        filled = sum(1 for f in exif_fields if record.get(f))
+        filled = sum(1 for f in [
+            'camera_make', 'camera_model', 'date_taken',
+            'focal_length', 'aperture', 'iso', 'exposure_time'
+        ] if record.get(f))
         if filled >= 5:
             return 'Full EXIF'
         elif filled >= 2:
             return 'Partial EXIF'
-        else:
-            return 'Minimal EXIF'
+        return 'Minimal EXIF'
     return 'Unknown'
 
 
 def determine_date_source(record):
     if record.get('date_taken'):
-        if record.get('has_exif'):
-            return 'EXIF'
-        else:
-            return 'File Modified'
+        return 'EXIF' if record.get('has_exif') else 'File Modified'
     elif record.get('file_modified'):
         return 'File Modified'
     return 'None'
@@ -228,20 +219,16 @@ def resolve_filename_conflict(dest_path, strategy='rename'):
         return dest_path
     if strategy == 'skip':
         return None
-    stem = dest_path.stem
-    suffix = dest_path.suffix
-    parent = dest_path.parent
+    stem, suffix, parent = dest_path.stem, dest_path.suffix, dest_path.parent
     for i in range(1, 100000):
-        new_name = stem + '-' + str(i) + suffix
-        p = parent / new_name
+        p = parent / (stem + '-' + str(i) + suffix)
         if not p.exists():
             return p
     return None
 
 
 def safe_filename(filename, max_length=255):
-    cleaned = re.sub('[<>:"/\\\\|?*]', '-', str(filename))
-    return cleaned[:max_length]
+    return re.sub('[<>:"/\\\\|?*]', '-', str(filename))[:max_length]
 
 
 def get_timestamp_string():
@@ -254,7 +241,8 @@ def get_record_defaults():
         'extension': '', 'file_type': '', 'size_mb': 0.0,
         'file_modified': '', 'md5_hash': '', 'delete_flag': 'No', 'error': None,
         'width': None, 'height': None, 'mode': None, 'dpi': None,
-        'date_taken': None, 'camera_make': None, 'camera_model': None,
+        'date_taken': None, 'date_source': 'None',
+        'camera_make': None, 'camera_model': None,
         'focal_length': None, 'aperture': None, 'iso': None, 'exposure_time': None,
         'gps_lat': None, 'gps_lon': None, 'has_exif': False,
         'is_blurry': None, 'blur_score': None, 'quality_rating': 'Unknown',
@@ -268,7 +256,7 @@ def get_record_defaults():
         'thumbnail_path': None, 'cluster_id': None, 'cluster_label': None,
         'location_city': None, 'location_country': None, 'location_name': None,
         'auto_tags': None, 'primary_tag': None,
-        'metadata_status': 'Unknown', 'date_source': 'None',
+        'metadata_status': 'Unknown',
         'is_similar': 'No', 'similar_group': '',
         'similar_methods': '', 'similar_score': '',
     }
