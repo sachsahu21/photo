@@ -1,0 +1,173 @@
+# ============================================================
+# IMAGE SCANNER v4.0 - CONFIGURATION
+# ============================================================
+
+scan:
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\google"
+  recursive: true
+  extensions:
+    images:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - tiff
+      - tif
+      - webp
+      - heic
+      - heif
+      - raw
+      - cr2
+      - cr3
+      - nef
+      - arw
+      - dng
+      - orf
+      - rw2
+      - pef
+      - sr2
+      - raf
+    videos:
+      - mp4
+      - mov
+      - avi
+      - mkv
+      - 3gp
+      - m4v
+      - mpg
+      - mpeg
+      - wmv
+      - flv
+      - webm
+      - mts
+      - ts
+      - vob
+
+blur_detection:
+  enabled: true
+  threshold: 100
+
+duplicates:
+  enabled: true
+  hash_algorithm: "md5"
+  match_mode: "exact"
+  similarity_threshold: 90
+  selection_criteria:
+    - quality
+    - resolution
+    - date
+    - size
+
+similar_detection:
+  enabled: false
+  ahash: true
+  phash: true
+  dhash: true
+  color_histogram: false
+  sift: false
+  ahash_threshold: 6
+  phash_threshold: 8
+  dhash_threshold: 6
+  histogram_threshold: 0.85
+  sift_threshold: 30
+  hash_size: 8
+  max_compare_per_image: 100
+
+organization:
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  day_threshold: 60
+  use_exif_date: true
+  operation: "copy"
+  conflict_resolution: "rename"
+  reuse_existing_folders: true
+  video_subfolder: true
+  # Preferred structure (option 2):
+  # Organized/<YYYY>/<YYYY-MM-00-xxxpic-[text]>/[videos/]
+  folder_structure: "year"
+  separate_screenshots: true
+  screenshot_keywords:
+    - screenshot
+    - screen_shot
+    - screen-shot
+    - capture
+    - snip
+    - snipaste
+    - sharex
+    - screen recording
+    - screenrecording
+    - printscreen
+  screenshot_detect_by_resolution: true
+  screenshot_custom_resolutions: []
+
+output:
+  output_folder: "./reports"
+  filename_prefix: "image-scan"
+  sheets:
+    all_images: true
+    blurry_images: true
+    duplicates: true
+    similar_images: true
+    summary: true
+    quality_report: true
+    analytics: true
+    clusters: true
+
+processing:
+  threads: 4
+  show_progress: true
+  verbose: false
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  fast_mode: false
+  skip_video_hash: false
+
+face_detection:
+  enabled: false
+  method: "opencv"
+
+thumbnails:
+  enabled: false
+  size: [150, 100]
+  output_folder: "./thumbnails"
+  embed_in_excel: false
+
+clustering:
+  enabled: false
+  method: "color_histogram"
+  n_clusters: 10
+  min_cluster_size: 3
+
+geocoding:
+  enabled: false
+  method: "offline"
+
+auto_tagging:
+  enabled: false
+  model: "mobilenet"
+  top_k: 5
+  confidence_threshold: 0.3
+
+comparison:
+  enabled: true
+  output_folder: "./comparisons"
+
+analytics:
+  enabled: true
+
+cloud:
+  enabled: false
+  provider: "none"
+  bucket: ""
+  prefix: ""
+  credentials_path: ""
+
+streamlit:
+  enabled: false
+  port: 8501
+
+logging:
+  level: "INFO"
+  file: "./logs/image-scanner.log"
+  console: true
+
