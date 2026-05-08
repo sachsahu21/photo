@@ -3,8 +3,6 @@
 import re
 import shutil
 import logging
-import json
-import time
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict, Counter
@@ -46,25 +44,6 @@ RE_DATE_KEY = re.compile('^(\\d{4}-\\d{2}-\\d{2})')
 RE_MONTH_KEY = re.compile('^(\\d{4}-\\d{2}-00)')
 
 
-def _dbg(hypothesisId, location, message, data=None, runId='pre-fix'):
-    #region agent log
-    try:
-        payload = {
-            "sessionId": "3a96e5",
-            "runId": runId,
-            "hypothesisId": hypothesisId,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        with open("debug-3a96e5.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    #endregion
-
-
 def _build_ss_regex(keywords):
     if not keywords:
         return re.compile('screenshot|screen_shot|screen-shot|capture|snip', re.IGNORECASE)
@@ -83,6 +62,12 @@ def _build_screen_res(custom_res):
                 except (ValueError, TypeError):
                     pass
     return res
+
+
+def _is_probable_camera_name(name):
+    up = str(name or '').upper()
+    prefixes = ('FB_IMG', 'IMG_', 'DSC_', 'PXL_', 'MVIMG_', 'VID_', 'PHOTO_')
+    return up.startswith(prefixes)
 
 
 def _count_files(fp):
@@ -124,6 +109,39 @@ def _extract_text_suffix(folder_name):
     return ''
 
 
+def _normalize_unaligned_folder_name(folder_path):
+    folder_path = Path(folder_path)
+    if not folder_path.exists() or not folder_path.is_dir():
+        return None
+    old_name = folder_path.name
+    actual_count = _count_files(folder_path)
+    if actual_count < 0:
+        return None
+    m = RE_PIC.match(old_name)
+    if m:
+        new_name = m.group(1) + '-' + format_pic_count(actual_count) + m.group(3)
+    else:
+        if '-' in old_name:
+            prefix, suffix = old_name.split('-', 1)
+            suffix = suffix.strip()
+            if suffix:
+                new_name = prefix.strip() + '-' + format_pic_count(actual_count) + '-' + suffix
+            else:
+                new_name = prefix.strip() + '-' + format_pic_count(actual_count)
+        else:
+            new_name = old_name.strip() + '-' + format_pic_count(actual_count)
+    if not new_name or new_name == old_name:
+        return None
+    new_path = folder_path.parent / new_name
+    if new_path.exists() and str(new_path) != str(folder_path):
+        return None
+    try:
+        folder_path.rename(new_path)
+        return str(new_path)
+    except Exception:
+        return None
+
+
 class ImageOrganizer:
 
     def __init__(self, config):
@@ -150,6 +168,8 @@ class ImageOrganizer:
         if not self.sep_ss:
             return False
         fn = str(rec.get('filename') or rec.get('Filename') or '')
+        if fn.upper().startswith('FB_IMG'):
+            return False
         if self.re_ss.search(fn):
             return True
         if not self.ss_by_res:
@@ -162,7 +182,7 @@ class ImageOrganizer:
             try:
                 iw, ih = int(w), int(h)
                 if (iw, ih) in self.screen_res or (ih, iw) in self.screen_res:
-                    if not he or ms in ('No EXIF', 'Minimal EXIF'):
+                    if (not he or ms in ('No EXIF', 'Minimal EXIF')) and not _is_probable_camera_name(fn):
                         return True
             except (ValueError, TypeError):
                 pass
@@ -487,34 +507,25 @@ class ImageOrganizer:
     @staticmethod
     def convert_structure(source_folder, target_structure, target_folder=None):
         source = Path(source_folder)
-        _dbg("H1", "organizer.py:convert_structure", "enter", {"source": str(source_folder), "target_structure": str(target_structure), "target_folder": str(target_folder or "")})
         if not source.exists():
             print('  Error: Source not found: ' + str(source))
-            _dbg("H1", "organizer.py:convert_structure", "source_missing", {"source": str(source)})
             return False
         dest = Path(target_folder) if target_folder else source
         if target_structure not in ('flat', 'year', 'year-month-date'):
             print('  Error: Invalid target: ' + target_structure)
-            _dbg("H1", "organizer.py:convert_structure", "invalid_target", {"target_structure": str(target_structure)})
             return False
         print('  Scanning all folders...')
         folders = _collect_all_folders(source)
-        _dbg("H2", "organizer.py:convert_structure", "scan_result", {"folders_count": len(folders), "sample": [{"name": f.get("name"), "current": f.get("current"), "year": f.get("year"), "month": f.get("month")} for f in folders[:10]]})
         if not folders:
             print('  No dated folders found!')
-            _dbg("H2", "organizer.py:convert_structure", "no_folders_found", {})
             return False
         if target_folder and str(dest) != str(source):
             ensure_directory(dest)
         moved = 0
         errors = 0
         renamed = 0
-        seen = 0
         for fd in tqdm(folders, desc='  Converting', disable=False):
             old_path = Path(fd['path'])
-            if seen < 50:
-                _dbg("H3", "organizer.py:convert_structure", "folder_iter", {"old_path": str(old_path), "name": fd.get("name"), "current": fd.get("current")})
-                seen += 1
             if fd['current'] == 'misc':
                 if target_folder and str(dest) != str(source):
                     new_path = dest / fd['name']
@@ -528,6 +539,11 @@ class ImageOrganizer:
                             moved += 1
                         except Exception:
                             errors += 1
+                continue
+            if fd.get('current') == 'unaligned':
+                updated_path = _normalize_unaligned_folder_name(old_path)
+                if updated_path:
+                    renamed += 1
                 continue
             new_path = _build_target_path(dest, target_structure, fd)
             if str(new_path) == str(old_path):
@@ -546,12 +562,10 @@ class ImageOrganizer:
                     moved += 1
             except Exception:
                 errors += 1
-        _dbg("H4", "organizer.py:convert_structure", "pre_cleanup", {"source": str(source), "dest": str(dest), "moved": moved, "renamed": renamed, "errors": errors})
         _cleanup_empty_dirs(source)
         if target_folder and str(dest) != str(source):
             _cleanup_empty_dirs(dest)
         print('  Converted: ' + str(moved) + ' moved, ' + str(renamed) + ' count-updated, ' + str(errors) + ' errors')
-        _dbg("H4", "organizer.py:convert_structure", "exit", {"moved": moved, "renamed": renamed, "errors": errors})
         return True
 
     @staticmethod
@@ -567,6 +581,10 @@ class ImageOrganizer:
         else:
             print('  No duplicate-date folders found')
         return True
+
+    @staticmethod
+    def detect_structure(root_folder):
+        return detect_structure(root_folder)
 
 
 def _merge_same_date_folders(root, structure):
@@ -835,4 +853,21 @@ def _cleanup_empty_dirs(folder):
                     pass
     except Exception:
         pass
+
+
+def detect_structure(root_folder):
+    root = Path(root_folder)
+    if not root.exists():
+        return 'flat'
+    top_dirs = [d for d in root.iterdir() if d.is_dir() and d.name != 'videos']
+    year_dirs = [d for d in top_dirs if RE_YEAR_DIR.match(d.name)]
+    if year_dirs:
+        for year_dir in year_dirs:
+            for sub in year_dir.iterdir():
+                if not sub.is_dir():
+                    continue
+                if RE_MONTH_DIR.match(sub.name) and not RE_DATE_PREFIX.match(sub.name) and not RE_MONTH_PREFIX.match(sub.name):
+                    return 'year-month-date'
+        return 'year'
+    return 'flat'
 

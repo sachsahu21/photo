@@ -305,8 +305,11 @@ def task_8(config, logger):
     if not Path(source).exists():
         print('  Error: Folder not found!')
         return
-    structure = config.get('organization.folder_structure', 'flat')
-    print('  Structure: ' + structure)
+    detected = ImageOrganizer.detect_structure(source)
+    print('  Detected structure: ' + detected)
+    override = input('  Structure override [flat/year/year-month-date] (Enter=detected): ').strip().lower()
+    structure = override if override in ('flat', 'year', 'year-month-date') else detected
+    print('  Using structure: ' + structure)
     print('')
     print('  This will find folders with same date like:')
     print('    2012-11-00-001pic-singapore')
