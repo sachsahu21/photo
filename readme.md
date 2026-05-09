@@ -1,362 +1,172 @@
 <div align="center">
 
-# 📸 Photo Library Scanner
+# 📸 Photo — Image Scanner v4.0 (Fancy Edition)
 
-**Scan · Analyse · Organise · Report**
+**Scan · Analyze · Organize · Report**
 
-*A professional-grade Python CLI that transforms a chaotic photo library into a clean, dated folder structure — with blur detection, duplicate removal, and a rich Excel report.*
-
-<br/>
+_A polished, local-first Python toolkit to tame your photo chaos — v4.0 is the latest and recommended version._
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Pillow](https://img.shields.io/badge/Pillow-EXIF%20%26%20Metadata-11557c?style=for-the-badge)](https://pillow.readthedocs.io)
-[![OpenCV](https://img.shields.io/badge/OpenCV-Blur%20Detection-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)](https://opencv.org)
-[![openpyxl](https://img.shields.io/badge/openpyxl-Excel%20Reports-217346?style=for-the-badge)](https://openpyxl.readthedocs.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
-
-<br/>
-
-```
-╔══════════════════════════════════════════════╗
-║   Photo Library Scanner  v2.1 (recommended) ║
-║   Scan · Detect · Organise                  ║
-╚══════════════════════════════════════════════╝
-```
+[![Release](https://img.shields.io/badge/Release-v4.0-blue?style=for-the-badge)](https://github.com/sachsahu21/photo/tree/main/v4.0)
 
 </div>
 
 ---
 
-## ✨ What It Does
+Welcome to the fanciest README you've ever read for a photo-scanning tool ✨ — you asked for a polished, v4.0-centric doc, so here it is. This project contains multiple versions; v4.0 (in folder `v4.0`) is the most feature-complete and stable release. If you want the shiny new behavior, use v4.0.
 
-| Feature | Detail |
-|---|---|
-| 🔍 **Deep Scan** | Recursively walks every subfolder for images & videos |
-| 🧠 **EXIF Extraction** | Date taken, camera make/model, focal length, aperture, ISO, GPS |
-| 🌫️ **Blur Detection** | Laplacian variance scoring → Very Blurry / Blurry / Fair / Sharp |
-| 🔗 **Duplicate Detection** | MD5 content hashing — finds identical files across different folders |
-| 🏆 **Best-Copy Selection** | Auto-picks the highest-quality copy from each duplicate group |
-| 📁 **Smart Organisation** | `YYYYMMDD` folder if ≥ 60 pics that day, `YYYYMM00` bucket otherwise |
-| 📊 **Excel Report** | 5-7 sheet workbook with filters, colour coding, and delete flags (depends on config) |
-| 🗑️ **Safe Deletion** | Mark files in Excel → script deletes only what you approved |
+Quick links
+- Latest (recommended): v4.0 — folder: `v4.0`
+- Other versions / historical: `v3.3`, `v3.2`, `v3.1`, `v3.0`, `v2`, `v1` (see repo root)
 
----
+Highlights — why v4.0?
+- Interactive CLI with sensible defaults and a small web dashboard (optional)
+- Full EXIF/video metadata extraction, blur scoring, duplicate detection and best-copy selection
+- Excel reporting (multi-sheet) and safe Excel-driven deletion workflow
+- Organization engine that groups by date and creates human-friendly folders
+- Checkpointing and resume support to handle long scans
 
-## 🗂️ Codebase Layout (variants)
-
-This repo contains multiple “generations” of the same photo scanner pipeline. Pick the folder you want to run:
-
-```
-photo/
-├── opus2-streamlit/          (v2.0)  CLI + Streamlit dashboard
-│   ├── main.py
-│   ├── config.yaml
-│   ├── requirements.txt
-│   ├── src/
-│   └── web/streamlit_app.py
-├── opus2-streamlit _v2/     (v2.1)  Recommended CLI + Streamlit + comparison pages
-│   ├── main.py
-│   ├── config.yaml
-│   ├── requirements.txt
-│   ├── src/
-│   └── web/streamlit_app.py
-├── pic_manage/               (v1.0.0) Earlier/scaled-down scanner
-│   ├── main.py
-│   ├── config.yaml
-│   ├── requirements.txt
-│   └── src/
-├── claude_v1/                Prototype
-└── z.old_code/              Archived experiments (v1/v2/v3)
-```
-
-### What the pipeline does (shared across variants)
-Scan a folder tree → extract EXIF/metadata → blur score → duplicate grouping + best-copy selection → write an Excel report → optionally delete marked files → organize (copy/move) into date-based folders (`YYYYMMDD` / `YYYYMM00`).
-
-### Outputs you can expect
-- Excel reports in the configured `output_folder` (defaults to `./reports`)
-- Logs in the configured `logging.file`
-- Backups for resuming mid-scan (pickle file, see “Task 1”)
-- Duplicate comparison HTML pages when enabled (v2.1: `./comparisons/DUP_*.html`)
+Table of contents
+- Features
+- Quick start (v4.0)
+- Configuration (important keys)
+- Example: run a smoke test
+- OneDrive & cloud notes (local-first advice)
+- Internals & module map (v4.0/src)
+- Troubleshooting
+- Contributing & License
 
 ---
 
-## ⚡ Quick Start
+Features
+- 🔍 Scan images & videos recursively and extract metadata (EXIF, dimensions, GPS)
+- 🌫️ Blur detection using Laplacian variance (fast, tunable)
+- 🔗 Duplicate detection (MD5 by default) and automated best-copy selection
+- 📊 Excel workbook with multiple sheets: All Images, Blurry, Duplicates, Summary, Analytics, etc.
+- 🗂️ Smart organization (copy or move) into date-based folders with configurable threshold
+- ⚡ Parallel processing (configurable thread count) with checkpointing
+- 🧩 Optional extras: Similar-image detection, clustering, face detection, thumbnails, Streamlit dashboard
 
-### 1 — Choose a variant & set up a virtual environment
+---
+
+Quick start (run v4.0)
+1. Open a terminal and change to the v4.0 folder:
 
 ```bash
-# Recommended (latest) variant:
-cd "opus2-streamlit _v2"
-
-python -m venv venv
-venv\Scripts\activate
-
-# Older alternatives:
-# cd "opus2-streamlit"
-# cd "pic_manage"
+cd path/to/photo/v4.0
 ```
 
-### 2 — Install dependencies
+2. Create & activate a virtual environment:
+- macOS / Linux
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+- Windows (Powershell)
+```powershell
+py -3 -m venv venv
+.\venv\Scripts\Activate.ps1
+```
 
+3. Install dependencies (recommended):
 ```bash
 pip install -r requirements.txt
 ```
+If you want a lightweight smoke test, installing Pillow and openpyxl may be enough for basic scanning of JPEGs.
 
-### 3 — Point it at your photos
+4. Edit `v4.0/config.yaml` and set `scan.folder_path` to the folder you want scanned (example given is Windows path; change to a local folder). Optionally set `processing.threads` to tune parallelism.
 
-Open `config.yaml` and edit the two paths:
-
-```yaml
-scan:
-  folder_path: "C:\\Users\\YourName\\Pictures"
-
-organization:
-  output_folder: "C:\\Users\\YourName\\Pictures\\Organised"
-```
-
-### 4 — Run
-
+5. Run the interactive CLI:
 ```bash
 python main.py
 ```
-
-You'll see the interactive menu:
-
-```
-┌──────────────────────────────────────────────┐
-│  1. Scan & Extract Metadata                  │
-│  1b. Resume Excel write (from backup)        │
-│  2. Delete Marked Files (from Excel)         │
-│  3. Organise Images by Date                  │
-│  4. Full Workflow  (1 → 2 → 3)               │
-│  5. Launch Web Dashboard (Streamlit)        │
-│  6. Generate Comparison Pages               │
-│  0. Exit                                     │
-└──────────────────────────────────────────────┘
-```
+Choose `1` to Scan & Extract, `1b` to resume from backup, `2` to delete flagged files from an Excel workbook, `3` to organize, etc.
 
 ---
 
-## 🔄 Workflow
+Configuration (most important keys — located in `v4.0/config.yaml`)
+- scan.folder_path: Path to your pictures (absolute recommended)
+- scan.recursive: true/false
+- processing.threads: number of parallel workers (set `1` to disable parallel scanning)
+- blur_detection.threshold: numeric threshold (lower = more sensitive)
+- duplicates.enabled / hash_algorithm: `md5` by default
+- organization.output_folder and folder_structure: where and how to write organized photos
+- output.output_folder: where Excel reports are written
 
-```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Task 1     │────▶│  Review      │────▶│  Task 2      │────▶│  Task 3      │
-│  Scan all   │     │  Excel file  │     │  Delete      │     │  Organise    │
-│  photos     │     │  Mark 'Yes'  │     │  flagged     │     │  by date     │
-└─────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
-```
-
-### Task 1 — Scan & Extract Metadata
-Walks the entire folder tree, extracts all metadata, scores blur, detects duplicates, and produces a full Excel workbook. A `records-backup.pkl` is saved so you can resume if anything interrupts. If you enable comparison generation in `config.yaml`, it can also produce `./comparisons/DUP_*.html`.
-
-### Task 2 — Delete Marked Files
-Opens the Excel report, reads every row where `DELETE? (Yes/No)` = `Yes`, and permanently deletes those files from disk.
-
-> ⚠️ **Deletion is permanent.** Review the Excel carefully before running Task 2.
-
-### Task 3 — Organise Images by Date
-Copies (or moves) every non-deleted image into a smart date folder:
-
-| Photos on that day | Folder name | Example |
-|---|---|---|
-| **≥ 60** (busy day — event, trip) | `YYYYMMDD` | `20260204` |
-| **< 60** (quiet day) | `YYYYMM00` | `20260200` |
-
-Date source priority: **EXIF date taken → file modified date → today**.
+Tip: If scanning OneDrive or cloud-backed folders, set threads to 1–2 or ensure files are "Always keep on this device" to avoid many on-demand downloads.
 
 ---
 
-## 📊 Excel Report Sheets
+Smoke test (quick validation)
+If you just want to verify v4.0 will run on your machine, use this minimal test (create `test_scan.py` in the `v4.0` folder):
 
-| Sheet | Contents |
-|---|---|
-| **Summary** | Totals, size, quality averages, format breakdown, EXIF/GPS coverage |
-| **All Images** | Full catalogue — every file with all metadata, colour-coded rows |
-| **Blurry Images** | Only blurry files, sorted worst-first, with editable delete flags |
-| **Duplicates** | Grouped by MD5 hash — best copy auto-selected, others flagged |
-| **Quality Report** | Score distribution: Excellent / Good / Fair / Poor |
-| **Analytics** | Optional scan analytics (quality/format/camera breakdowns) |
-| **Clusters** | Optional clustering/groups (e.g., color-histogram clusters) |
+```python
+# test_scan.py
+from pathlib import Path
+from src.config_manager import ConfigManager
+from src.scanner import ImageScanner
+from PIL import Image
 
-### Colour coding in All Images
+cfg = ConfigManager('config.yaml')
+# use a tiny sample folder inside v4.0
+cfg.set('scan.folder_path', './sample_images')
+cfg.set('processing.threads', 1)
 
-| Row colour | Meaning |
-|---|---|
-| 🟠 Orange | Blurry image |
-| 🔴 Light red | Duplicate file |
-| ⬜ Alternating grey/white | Normal image |
+# create sample image
+p = Path('./sample_images')
+p.mkdir(parents=True, exist_ok=True)
+img = Image.new('RGB', (100,100), (255,0,0))
+img.save(p / 'sample_test_image.jpg')
 
----
-
-## 🌫️ Blur Detection
-
-Uses **Laplacian variance** — a fast, reliable measure of edge sharpness.
-
-| Score range | Rating | Meaning |
-|---|---|---|
-| `< 50` | Very Blurry | Almost certainly unusable |
-| `50 – 100` | Blurry | Noticeably soft |
-| `100 – 200` | Fair | Acceptable |
-| `> 200` | Sharp | Crisp and clear |
-
-Tune sensitivity in `config.yaml`:
-
-```yaml
-blur_detection:
-  threshold: 100   # lower = more sensitive
+scanner = ImageScanner(cfg.to_dict())
+records = scanner.scan(cfg.get('scan.folder_path'))
+print('Records found:', len(records))
+if records:
+    print(records[0])
 ```
 
----
-
-## 🔗 Duplicate Detection & Best-Copy Selection
-
-Files are compared by **MD5 content hash** — identical bytes = duplicate, regardless of filename or folder.
-
-When duplicates are found, the best copy is automatically selected based on (in order):
-
-1. **Quality score** — highest overall score wins
-2. **Resolution** — highest megapixels
-3. **Date** — newest file
-4. **Size** — largest file
-
-All criteria and their order are configurable in `config.yaml`:
-
-```yaml
-duplicates:
-  selection_criteria:
-    - quality
-    - resolution
-    - date
-    - size
-```
-
-
----
-
-## ⚙️ Configuration Reference
-
-```yaml
-# ── Scan ──────────────────────────────────────────────────
-scan:
-  folder_path: "C:\\Users\\YourName\\Pictures"
-  recursive: true
-  extensions:
-    images: [jpg, jpeg, png, gif, bmp, tiff, webp, heic, raw, cr2, nef, arw, dng]
-    videos: [mp4, mov, avi, mkv, 3gp, m4v]
-
-# ── Organisation ──────────────────────────────────────────
-organization:
-  output_folder: "C:\\Users\\YourName\\Pictures\\Organised"
-  day_threshold: 60        # >= 60 pics → YYYYMMDD, else YYYYMM00
-  operation: "copy"        # "copy" (safe) or "move"
-  use_exif_date: true
-
-# ── Blur Detection ────────────────────────────────────────
-blur_detection:
-  threshold: 100           # lower = more sensitive to blur
-
-# ── Duplicates ────────────────────────────────────────────
-duplicates:
-  hash_algorithm: "md5"    # "md5" (fast) or "sha256" (more accurate)
-  selection_criteria: [quality, resolution, date, size]
-
-# ── Output ────────────────────────────────────────────────
-output:
-  output_folder: "./output"
-```
-
----
-
-## 📦 Requirements
-
-```
-Pillow
-openpyxl
-PyYAML
-tqdm
-numpy
-opencv-python (or opencv-python-headless)
-python-dateutil
-
-# v2.x extras (enable in config.yaml)
-pillow-heif (HEIC/HEIF support)
-streamlit (web dashboard)
-reverse_geocoder (geocoding)
-scikit-learn (clustering)
-Jinja2 (comparison page templates)
-pymediainfo (richer video metadata; requires MediaInfo installed)
-```
-
-Install all at once:
-
+Run:
 ```bash
-pip install -r requirements.txt
+python test_scan.py
 ```
 
 ---
 
-## 🧩 Module Overview
-
-| Module | Responsibility |
-|---|---|
-| `main.py` | Interactive CLI menu, orchestrates all tasks |
-| `config_manager.py` | Loads `config.yaml`, dot-notation access, validates paths |
-| `scanner.py` | Walks folders, opens images with Pillow, extracts all EXIF fields |
-| `blur_detector.py` | Reads image with OpenCV, computes Laplacian variance, returns rating |
-| `duplicate_handler.py` | Builds MD5 hash map, groups duplicates, scores and selects best copy |
-| `organizer.py` | Pre-counts images per day, applies threshold logic, copies/moves files |
-| `excel_writer.py` | Writes a multi-sheet workbook (5-7 tabs) with colours, filters, and freeze panes |
-| `utils.py` | `file_hash`, `get_gps`, `get_date_from_exif`, `safe_string` |
-| `main_utils.py` | `setup_logging`, `save_backup`, `load_backup` |
+OneDrive / Cloud-backed folders — practical notes
+- The scanner reads the local filesystem. If your OneDrive uses Files On-Demand (cloud-only placeholders), the scanner may trigger downloads or fail to open some placeholders. Recommended approaches:
+  - Mark folders as "Always keep on this device" so they exist locally before scanning.
+  - Reduce `processing.threads` to 1 or 2 for cloud folders to avoid flooding the OneDrive client with simultaneous downloads.
+  - For server-only scanning (no local sync), consider a Graph API integration (not included by default).
 
 ---
 
-## 🛠️ Troubleshooting
-
-**No images found**
-- Check `scan.folder_path` in `config.yaml` — must be an absolute path
-- Verify the folder exists and Python has read permission
-- Confirm your file extensions are listed under `scan.extensions.images`
-
-**Blur detection returns errors**
-- Ensure `opencv-python` is installed: `pip install opencv-python --break-system-packages`
-- Some RAW formats (`.cr2`, `.nef`) cannot be read by OpenCV — they will show `Error: Cannot read image` and be skipped gracefully
-
-**Excel file is locked / won't save**
-- Close the Excel file before running any task
-- Only one process can write to an `.xlsx` file at a time
-
-**Task 1 interrupted mid-scan**
-- A `records-backup.pkl` is saved automatically after scanning
-- Use menu option `1b` to skip re-scanning and write the Excel from the backup
-
-**Out of memory on very large libraries**
-- Reduce `processing.threads` in `config.yaml`
-- Split into smaller subfolders and scan each separately
+Internals (v4.0/src) — quick map
+- config_manager.py — load/validate config
+- scanner.py — core scanning, extraction, blur & duplicate hooks
+- parallel_processor.py — threaded worker pool with progress bar
+- duplicate_handler.py — group duplicates & best-copy selection
+- organizer.py — move/copy logic to create date-based folders
+- excel_writer.py — writes the multi-sheet report
+- comparison_generator.py — HTML comparison pages
+- blur_detector.py, face_detector.py, thumbnail_generator.py, similar_detector.py, image_clusterer.py — helper modules
 
 ---
 
-## 🗺️ Roadmap
-
-- [x] Streamlit dashboard (run `python -m streamlit run web/streamlit_app.py`)
-- [x] Comparison pages generator (HTML in `./comparisons`)
-- [ ] Face detection & grouping (if you want it fully integrated/enabled)
-- [ ] Google Drive / OneDrive upload
-- [ ] Machine-learning quality assessment
-- [ ] Thumbnail preview column in Excel
-- [ ] Scheduled / watched-folder scanning
+Tips & Troubleshooting
+- "4 workers" message: Controlled by `processing.threads` in the config. Set to `1` to force single-threaded scanning.
+- If `scan.folder_path not found`, update `v4.0/config.yaml` to the correct path.
+- Missing OpenCV / pillow-heif / pymediainfo: install from `requirements.txt` or disable optional features in `config.yaml`.
+- Excel workbook locked: close Excel before running tasks that write to the file.
 
 ---
 
-## 📄 License
+Contributing
+- Found a bug or have a feature idea? Open an issue or a PR on GitHub. Keep changes scoped to the `v4.0/src` modules unless you are updating other versions intentionally.
 
-MIT — see [LICENSE](LICENSE) for details.
+License
+- MIT — see LICENSE file.
 
 ---
 
-<div align="center">
-
-Made with ☕ and too many duplicate holiday photos.
-
-</div>
+Made with ☕, a stubborn love for clean photo folders, and an unreasonable number of vacation duplicates. v4.0 — go tidy up those memories.
