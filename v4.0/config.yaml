@@ -64,7 +64,7 @@ duplicates:
     - size
 
 similar_detection:
-  enabled: false
+  enabled: true
   ahash: true
   phash: true
   dhash: true
@@ -100,7 +100,7 @@ organization:
   #   skip      = skip incoming file if same name exists
   #   overwrite = replace existing file
   # Example: conflict_resolution: "rename"
-  conflict_resolution: "rename"
+  conflict_resolution: "overwrite"
   # true = merge into existing date/month folders if present
   reuse_existing_folders: true
   # true = videos inside each folder go to videos/ subfolder
@@ -112,7 +112,7 @@ organization:
   #
   # Example (year):
   #   Organized/2024/2024-06-00-0120pic-goa/
-  folder_structure: "year"
+  folder_structure: "flat"
   # Screenshot handling:
   #   true  = screenshots separated into screenshot folders
   #   false = screenshots kept with normal photos
@@ -171,7 +171,7 @@ processing:
 
 face_detection:
   # method options currently: "opencv"
-  enabled: false
+  enabled: true
   method: "opencv"
 
 thumbnails:
