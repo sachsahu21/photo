@@ -47,3 +47,6 @@ output/
 thumbnails/
 logs/
 comparisons/
+.venv311/
+.venv312/
+.cursor/

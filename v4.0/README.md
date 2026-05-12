@@ -146,6 +146,8 @@ Recommended sequence when changing structure:
 
 Option 8 now uses detected on-disk structure so it works even if config still has older structure value.
 
+If two folders share the same date prefix but have **different** non-empty text suffixes (for example `-singapore` vs `-malaysia`), Option 8 **does not merge** them so trips or locations stay separate.
+
 ## Troubleshooting
 
 - Video metadata missing:

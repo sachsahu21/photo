@@ -312,7 +312,7 @@ def task_8(config, logger):
     print('  Using structure: ' + structure)
     print('')
     print('  This will find folders with same date like:')
-    print('    2012-11-00-001pic-singapore')
+    print(' example:   2012-11-00-001pic-singapore')
     print('    2012-11-00-002pic')
     print('  And merge them into:')
     print('    2012-11-00-003pic-singapore')

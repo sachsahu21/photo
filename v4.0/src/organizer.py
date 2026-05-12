@@ -109,6 +109,16 @@ def _extract_text_suffix(folder_name):
     return ''
 
 
+def _should_skip_merge_for_suffix_conflict(group_folders):
+    """True if two+ folders have different non-empty text suffixes (do not merge)."""
+    texts = set()
+    for folder in group_folders:
+        t = _extract_text_suffix(folder.name)
+        if t:
+            texts.add(t)
+    return len(texts) > 1
+
+
 def _normalize_unaligned_folder_name(folder_path):
     folder_path = Path(folder_path)
     if not folder_path.exists() or not folder_path.is_dir():
@@ -630,6 +640,8 @@ def _merge_same_date_in_dir(parent_dir):
             date_groups[dk].append(item)
     for dk, group_folders in sorted(date_groups.items()):
         if len(group_folders) < 2:
+            continue
+        if _should_skip_merge_for_suffix_conflict(group_folders):
             continue
         best_text = ''
         best_count = 0

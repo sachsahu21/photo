@@ -1,13 +1,12 @@
 <div align="center">
 
-# 📸 Photo — Image Scanner v4.0 (Fancy Edition)
+# 📸 Photo — Image Scanner v4.0
 
 **Scan · Analyze · Organize · Report**
 
 _A polished, local-first Python toolkit to tame your photo chaos — v4.0 is the latest and recommended version._
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 [![Release](https://img.shields.io/badge/Release-v4.0-blue?style=for-the-badge)](https://github.com/sachsahu21/photo/tree/main/v4.0)
 
 </div>
@@ -163,9 +162,6 @@ Tips & Troubleshooting
 
 Contributing
 - Found a bug or have a feature idea? Open an issue or a PR on GitHub. Keep changes scoped to the `v4.0/src` modules unless you are updating other versions intentionally.
-
-License
-- MIT — see LICENSE file.
 
 ---
 
