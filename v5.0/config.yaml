@@ -5,7 +5,7 @@
 scan:
   # Source folder to scan (images/videos)
   # Example: "D:\\Photos\\Unorganized"
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\google"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test"
   # true = scan subfolders, false = only top-level folder
   recursive: true
   extensions:

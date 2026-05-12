@@ -4,9 +4,47 @@ from __future__ import annotations
 
 import json
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
+
+def _ensure_json_serializable(obj: Any) -> Any:
+    """Deep-convert values so json.dumps never hits datetime/Path/tuple/etc."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, datetime):
+        return obj.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): _ensure_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_ensure_json_serializable(x) for x in obj]
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+    item_fn = getattr(obj, "item", None)
+    if callable(item_fn):
+        try:
+            return _ensure_json_serializable(item_fn())
+        except Exception:
+            pass
+    return str(obj)
+
+
+def _dateish_to_str(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(v, date):
+        return v.isoformat()
+    return str(v).strip()
 
 
 class MetadataStore:
@@ -52,20 +90,20 @@ class MetadataStore:
             "size_mb": rec.get("size_mb", 0),
             "md5_hash": rec.get("md5_hash", ""),
         }
-        manual_date = rec.get("manual_date_override", "") or ""
-        date_taken = rec.get("date_taken", "") or ""
-        file_modified = rec.get("file_modified", "") or ""
-        eff_date = rec.get("effective_organize_date", "") or ""
-        eff_src = rec.get("effective_date_source", "") or rec.get("date_source", "") or ""
+        manual_date = _dateish_to_str(rec.get("manual_date_override", "") or "")
+        date_taken = _dateish_to_str(rec.get("date_taken", "") or "")
+        file_modified = _dateish_to_str(rec.get("file_modified", "") or "")
+        eff_date = _dateish_to_str(rec.get("effective_organize_date", "") or "")
+        eff_src = str(rec.get("effective_date_source", "") or rec.get("date_source", "") or "")
         if not eff_date:
             if manual_date:
-                eff_date = str(manual_date)[:10]
+                eff_date = manual_date[:10]
                 eff_src = "manual"
             elif date_taken:
-                eff_date = str(date_taken)[:10]
+                eff_date = date_taken[:10]
                 eff_src = "exif"
             elif file_modified:
-                eff_date = str(file_modified)[:10]
+                eff_date = file_modified[:10]
                 eff_src = "modified"
             else:
                 eff_src = "undated"
@@ -77,13 +115,15 @@ class MetadataStore:
             "effective_organize_date": eff_date,
             "effective_date_source": eff_src,
         }
-        base["quality"] = {
-            "width": rec.get("width"),
-            "height": rec.get("height"),
-            "blur_score": rec.get("blur_score"),
-            "quality_score": rec.get("quality_score"),
-            "is_blurry": rec.get("is_blurry"),
-        }
+        base["quality"] = _ensure_json_serializable(
+            {
+                "width": rec.get("width"),
+                "height": rec.get("height"),
+                "blur_score": rec.get("blur_score"),
+                "quality_score": rec.get("quality_score"),
+                "is_blurry": rec.get("is_blurry"),
+            }
+        )
         face_count = int(rec.get("face_count", 0) or 0)
         existing_faces = base.get("faces", [])
         if not isinstance(existing_faces, list):
@@ -93,20 +133,23 @@ class MetadataStore:
                 {"face_idx": i, "person_id": f"UNK-{i+1:04d}", "person_name": None, "label_source": "unknown"}
                 for i in range(face_count)
             ]
-        base["faces"] = existing_faces
-        base["tags"] = {
-            "primary_tag": rec.get("primary_tag"),
-            "auto_tags": rec.get("auto_tags"),
-            "manual_tags": rec.get("manual_tags", []),
-        }
-        base["kpi"] = {
-            "metadata_status": rec.get("metadata_status", ""),
-            "face_count": face_count,
-            "is_duplicate": rec.get("is_duplicate", "No"),
-            "is_similar": rec.get("is_similar", "No"),
-        }
-        # Keep payload extensible and forward-compatible for future schema additions.
-        base["record"] = dict(rec)
+        base["faces"] = _ensure_json_serializable(existing_faces)
+        base["tags"] = _ensure_json_serializable(
+            {
+                "primary_tag": rec.get("primary_tag"),
+                "auto_tags": rec.get("auto_tags"),
+                "manual_tags": rec.get("manual_tags", []),
+            }
+        )
+        base["kpi"] = _ensure_json_serializable(
+            {
+                "metadata_status": rec.get("metadata_status", ""),
+                "face_count": face_count,
+                "is_duplicate": rec.get("is_duplicate", "No"),
+                "is_similar": rec.get("is_similar", "No"),
+            }
+        )
+        base["record"] = _ensure_json_serializable(dict(rec))
         return base
 
     def _doc_to_record(self, doc: Dict[str, Any], json_path: Path) -> Dict[str, Any]:
@@ -171,6 +214,7 @@ class MetadataStore:
 
             doc["schema_version"] = self.schema_version
             doc["tool_version"] = self.tool_version
+            doc = _ensure_json_serializable(doc)
             jp.write_text(json.dumps(doc, indent=2, ensure_ascii=True), encoding="utf-8")
             normalized = self._doc_to_record(doc, jp)
             out.append(normalized)
@@ -199,4 +243,3 @@ class MetadataStore:
             except Exception:
                 continue
         return records
-
