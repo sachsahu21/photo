@@ -1,0 +1,265 @@
+# ============================================================
+# IMAGE SCANNER v4.1 - CONFIGURATION
+# ============================================================
+
+scan:
+  # Source folder to scan (images/videos)
+  # Example: "D:\\Photos\\Unorganized"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test"
+  # true = scan subfolders, false = only top-level folder
+  recursive: true
+  extensions:
+    # Add/remove file extensions as needed (without dot)
+    images:
+      - jpg
+      - jpeg
+      - png
+      - gif
+      - bmp
+      - tiff
+      - tif
+      - webp
+      - heic
+      - heif
+      - raw
+      - cr2
+      - cr3
+      - nef
+      - arw
+      - dng
+      - orf
+      - rw2
+      - pef
+      - sr2
+      - raf
+    videos:
+      - mp4
+      - mov
+      - avi
+      - mkv
+      - 3gp
+      - m4v
+      - mpg
+      - mpeg
+      - wmv
+      - flv
+      - webm
+      - mts
+      - ts
+      - vob
+
+blur_detection:
+  enabled: true
+  threshold: 100
+
+duplicates:
+  enabled: true
+  hash_algorithm: "md5"
+  match_mode: "exact"
+  similarity_threshold: 90
+  selection_criteria:
+    - quality
+    - resolution
+    - date
+    - size
+
+similar_detection:
+  enabled: false
+  ahash: true
+  phash: true
+  dhash: true
+  color_histogram: false
+  sift: false
+  ahash_threshold: 6
+  phash_threshold: 8
+  dhash_threshold: 6
+  histogram_threshold: 0.85
+  sift_threshold: 30
+  hash_size: 8
+  max_compare_per_image: 100
+
+# ============================================================================
+# FACE SEARCH (v4.1) - seed-based person search
+# ============================================================================
+# This feature finds a person (e.g., your brother) across years by:
+#   1) Building a face embedding index for your full library
+#   2) Using seed photos to create a person profile and searching the index
+faces:
+  enabled: true
+  # Folder containing per-person subfolders of seed photos
+  # Example: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
+  seed_root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
+  # Subfolder name under seed_root to search for (example: Brother)
+  target_person: ""
+  # Which folder to index for searching:
+  #   scan = index everything under scan.folder_path
+  #   organized = index everything under organization.output_folder
+  library_source: "scan"
+  # SQLite DB path to store embeddings (relative paths are resolved from v4.1/)
+  index_db: "./face_index.sqlite"
+  # Similarity threshold (cosine). Higher = stricter.
+  similarity_threshold: 0.35
+  # Maximum matches to print/export
+  max_results: 200
+
+organization:
+  # Final organized library root
+  # Example:
+  #   output_folder: "D:\\Photos\\Organized"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  # If a single day has >= day_threshold files, create daily folder:
+  #   yyyy-mm-dd-xxxxpic-[text]
+  # Else files are grouped monthly:
+  #   yyyy-mm-00-xxxxpic-[text]
+  day_threshold: 60
+  # true = prefer EXIF date; false = use file modified date
+  use_exif_date: true
+  # operation options:
+  #   copy = keep original files + create organized copy
+  #   move = move files into organized folder
+  # Example: operation: "copy"
+  operation: "copy"
+  # conflict_resolution options:
+  #   rename    = keep both files by renaming destination
+  #   skip      = skip incoming file if same name exists
+  #   overwrite = replace existing file
+  # Example: conflict_resolution: "rename"
+  conflict_resolution: "overwrite"
+  # true = merge into existing date/month folders if present
+  reuse_existing_folders: true
+  # true = videos inside each folder go to videos/ subfolder
+  video_subfolder: true
+  # folder_structure options:
+  #   flat             -> Organized/yyyy-mm-dd-xxxxpic-[text]/
+  #   year             -> Organized/yyyy/yyyy-mm-dd-xxxxpic-[text]/
+  #   year-month-date  -> Organized/yyyy/mm-Mon/yyyy-mm-dd-xxxxpic-[text]/
+  #
+  # Example (year):
+  #   Organized/2024/2024-06-00-0120pic-goa/
+  folder_structure: "flat"
+  # Screenshot handling:
+  #   true  = screenshots separated into screenshot folders
+  #   false = screenshots kept with normal photos
+  separate_screenshots: true
+  # Filename keywords that classify as screenshot
+  screenshot_keywords:
+    - screenshot
+    - screen_shot
+    - screen-shot
+    - capture
+    - snip
+    - snipaste
+    - sharex
+    - screen recording
+    - screenrecording
+    - printscreen
+  # true = also use common screen resolutions as fallback detection
+  screenshot_detect_by_resolution: true
+  # Optional custom screenshot resolutions:
+  # screenshot_custom_resolutions:
+  #   - [1170, 2532]
+  #   - [1080, 2400]
+  screenshot_custom_resolutions: []
+
+output:
+  # Excel output folder
+  output_folder: "./reports"
+  # Excel file prefix (example: image-scan-2026-05-08.xlsx)
+  filename_prefix: "image-scan"
+  sheets:
+    # Toggle sheets:
+    #   true = generate, false = skip
+    all_images: true
+    blurry_images: true
+    duplicates: true
+    similar_images: true
+    summary: true
+    quality_report: true
+    analytics: true
+    clusters: true
+
+metadata:
+  # Empty = <scan.folder_path>/metadata
+  root_folder: ""
+  # Options:
+  #   skip_if_present = do not touch existing json
+  #   update_missing  = fill/add new keys only (recommended default)
+  #   refresh         = recompute known keys and keep extensible payload
+  #   full_overwrite  = rebuild json from current scan record
+  update_strategy: "update_missing"
+  schema_version: "1.0"
+  tool_version: "v5.1"
+
+processing:
+  # threads: 0 or omitted = auto, or set fixed worker count
+  threads: 4
+  # true = show tqdm progress bars
+  show_progress: true
+  # true = verbose console logging
+  verbose: false
+  # Resume support for long scans
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  # fast_mode true = skip expensive operations where supported
+  fast_mode: false
+  # false = include video hash in duplicate logic (slower but stronger)
+  skip_video_hash: false
+
+face_detection:
+  # method options currently: "opencv"
+  enabled: true
+  method: "opencv"
+
+thumbnails:
+  # Generate small thumbnails for preview workflows
+  enabled: false
+  size: [150, 100]
+  output_folder: "./thumbnails"
+  # true = embed thumbnails in Excel (larger file size)
+  embed_in_excel: false
+
+clustering:
+  # method options currently: "color_histogram"
+  enabled: false
+  method: "color_histogram"
+  n_clusters: 10
+  min_cluster_size: 3
+
+geocoding:
+  # method options: "offline"
+  enabled: false
+  method: "offline"
+
+auto_tagging:
+  # model options currently: "mobilenet"
+  enabled: false
+  model: "mobilenet"
+  top_k: 5
+  confidence_threshold: 0.3
+
+comparison:
+  enabled: true
+  output_folder: "./comparisons"
+
+analytics:
+  enabled: true
+
+cloud:
+  # cloud.enabled true requires provider setup in code/integration
+  enabled: false
+  provider: "none"
+  bucket: ""
+  prefix: ""
+  credentials_path: ""
+
+streamlit:
+  # Dashboard URL: http://localhost:<port>
+  enabled: false
+  port: 8501
+
+logging:
+  # levels: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  file: "./logs/image-scanner.log"
+  console: true
+
