@@ -190,6 +190,7 @@ output:
     analytics: true
     clusters: true
 
+
 metadata:
   # Empty = <scan.folder_path>/metadata
   root_folder: ""
