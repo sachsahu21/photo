@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class ExcelWriter:
 
     ALL_COLS = [
+        ('media_id', 'Media ID', 36),
         ('filename', 'Filename', 30),
         ('folder', 'Folder', 50),
         ('extension', 'Format', 10),
@@ -89,6 +90,7 @@ class ExcelWriter:
     ]
 
     DUP_COLS = [
+        ('media_id', 'Media ID', 36),
         ('duplicate_group', 'Group', 12),
         ('is_best_in_group', 'Best?', 8),
         ('recommendation', 'Recommendation', 20),

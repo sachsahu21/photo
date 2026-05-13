@@ -105,6 +105,20 @@ class ConfigManager:
                 'schema_version': '1.0',
                 'tool_version': 'v5.1',
             },
+            'workflow': {
+                'reset_dup_sim_for_excel': False,
+            },
+            'faces': {
+                'enabled': False,
+                'seed_root': './seed',
+                'target_person': '',
+                'library_source': 'scan',
+                'data_folder': './face_data',
+                'index_db': './face_index.sqlite',
+                'similarity_threshold': 0.35,
+                'max_results': 200,
+                'untagged_root': './untagged_people',
+            },
             'processing': {
                 'threads': 0,
                 'show_progress': True,

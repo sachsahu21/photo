@@ -70,6 +70,23 @@ class MetadataStore:
         key = hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()
         return self.root / f"{key}.json"
 
+    def _media_id_for_record(self, rec: Dict[str, Any], existing: Dict[str, Any] | None = None) -> str:
+        if isinstance(existing, dict):
+            ef = existing.get("file", {}) if isinstance(existing.get("file", {}), dict) else {}
+            if ef.get("media_id"):
+                return str(ef.get("media_id"))
+        if rec.get("media_id"):
+            return str(rec.get("media_id"))
+        md5 = str(rec.get("md5_hash", "") or "").strip()
+        if md5:
+            return md5.lower()
+        raw = (
+            str(rec.get("full_path", "")).strip() + "|" +
+            str(rec.get("filename", "")).strip() + "|" +
+            str(rec.get("size_mb", "")).strip()
+        )
+        return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
     def _now(self) -> str:
         return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -81,7 +98,9 @@ class MetadataStore:
         base.setdefault("generated_at", now)
         base["updated_at"] = now
 
+        media_id = self._media_id_for_record(rec, existing=base)
         base["file"] = {
+            "media_id": media_id,
             "filename": rec.get("filename", ""),
             "full_path": rec.get("full_path", ""),
             "folder": rec.get("folder", ""),
@@ -152,6 +171,33 @@ class MetadataStore:
         base["record"] = _ensure_json_serializable(dict(rec))
         return base
 
+    def _apply_person_from_doc(self, rec: Dict[str, Any], doc: Dict[str, Any]) -> None:
+        """Map top-level doc['person'] into Excel-facing fields (steps 6–8 read JSON via load_records)."""
+        p = doc.get("person")
+        if not isinstance(p, dict) or not p:
+            return
+        status = str(p.get("status", "")).strip().lower()
+        if status == "known":
+            rec["person_match_flag"] = "Yes"
+            label = str(p.get("person_name", "") or p.get("person_id", "")).strip()
+            rec["person_label"] = label
+            sim = p.get("similarity", "")
+            if sim is None or sim == "":
+                rec["person_similarity"] = ""
+            else:
+                try:
+                    rec["person_similarity"] = float(sim)
+                except (TypeError, ValueError):
+                    rec["person_similarity"] = str(sim)
+            src = str(p.get("source", "") or "seed").strip()
+            rec["person_match_source"] = src if src else "seed"
+        elif status == "unknown":
+            rec["person_match_flag"] = "No"
+            rec["person_label"] = str(p.get("person_id", "") or "").strip()
+            rec["person_similarity"] = ""
+            src = str(p.get("source", "") or "untagged").strip()
+            rec["person_match_source"] = src if src else "untagged"
+
     def _doc_to_record(self, doc: Dict[str, Any], json_path: Path) -> Dict[str, Any]:
         rec = dict(doc.get("record", {}) or {})
         f = doc.get("file", {}) or {}
@@ -159,6 +205,7 @@ class MetadataStore:
         q = doc.get("quality", {}) or {}
         k = doc.get("kpi", {}) or {}
         rec.update({
+            "media_id": f.get("media_id", ""),
             "filename": f.get("filename", ""),
             "full_path": f.get("full_path", ""),
             "folder": f.get("folder", ""),
@@ -185,6 +232,7 @@ class MetadataStore:
             "metadata_json_path": str(json_path),
             "schema_version": doc.get("schema_version", self.schema_version),
         })
+        self._apply_person_from_doc(rec, doc)
         return rec
 
     def upsert_records(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

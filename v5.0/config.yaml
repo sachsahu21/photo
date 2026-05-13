@@ -86,6 +86,8 @@ similar_detection:
 #   2) Using seed photos to create a person profile and searching the index
 faces:
   enabled: true
+  # Ensured on disk before face index build; optional single place for face artifacts
+  data_folder: "./face_data"
   # Folder containing per-person subfolders of seed photos
   # Example: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
   seed_root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
@@ -101,6 +103,8 @@ faces:
   similarity_threshold: 0.35
   # Maximum matches to print/export
   max_results: 200
+  # Folder for unknown-person sample export (max 5 samples/person)
+  untagged_root: "./untagged_people"
 
 organization:
   # Final organized library root
@@ -124,7 +128,7 @@ organization:
   #   skip      = skip incoming file if same name exists
   #   overwrite = replace existing file
   # Example: conflict_resolution: "rename"
-  conflict_resolution: "overwrite"
+  conflict_resolution: "rename"
   # true = merge into existing date/month folders if present
   reuse_existing_folders: true
   # true = videos inside each folder go to videos/ subfolder
@@ -189,6 +193,10 @@ metadata:
   update_strategy: "update_missing"
   schema_version: "1.0"
   tool_version: "v5.1"
+
+# Excel step 2: if true, clears Duplicate?/Similar? to No in the workbook source data
+workflow:
+  reset_dup_sim_for_excel: false
 
 processing:
   # threads: 0 or omitted = auto, or set fixed worker count
