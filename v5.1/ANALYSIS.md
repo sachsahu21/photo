@@ -41,6 +41,33 @@ Image Scanner v5.1 is a comprehensive tool for managing, analyzing, and organizi
 
 ---
 
+## Deep Dive: Face Data vs. Untagged People
+
+A common point of confusion is the difference between these two:
+
+*   **Face Data**: This is "raw" detection. During a scan, the tool identifies *how many* faces are in a photo and categorizes it (e.g., "Portrait" if 1 face, "Group" if 5 faces). It doesn't know *who* the people are.
+*   **Untagged People**: These are detected faces that haven't been matched to a specific identity yet.
+
+**How to resolve same people in multiple folders?**
+If the same person appears across many folders, you can resolve this using **Task 10 (Find Person)**. By providing "seed photos" (photos you know are of that person), the tool will search the entire library—regardless of which folder the files are in—and link them to a single name (label) in your Excel report and Metadata Store.
+
+*Note: This resolves their identity in the records, but it does not physically move all their photos into one folder.*
+
+---
+
+## Deep Dive: Step 7 (Convert Folder Structure)
+
+**Step 7** is a powerful utility used **after** you have already organized your photos. If you decide you don't like your current folder layout, Step 7 lets you change it without re-scanning everything.
+
+It converts between three styles:
+1.  **Flat**: All date-folders in one big list.
+2.  **Year**: Folders grouped by year (e.g., `2023/2023-01-01...`).
+3.  **Year-Month-Date**: Folders grouped by year and then month (e.g., `2023/01-Jan/2023-01-01...`).
+
+It is highly recommended to run **Step 8 (Merge Same-Date Folders)** after using Step 7 to ensure any folders that ended up in the same place are combined.
+
+---
+
 ## Dos and Don'ts
 
 ### Dos
