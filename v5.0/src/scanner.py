@@ -32,6 +32,12 @@ try:
 except ImportError:
     CV2_OK = False
 
+try:
+    import numpy as np
+    NP_OK = True
+except ImportError:
+    NP_OK = False
+
 
 class ImageScanner:
 
@@ -104,8 +110,15 @@ class ImageScanner:
         if self.face_enabled and self._face_detector is None:
             try:
                 from .face_detector import FaceDetector
-                method = self.config.get('face_detection', {}).get('method', 'opencv')
-                self._face_detector = FaceDetector(method=method)
+                fd = self.config.get('face_detection', {}) or {}
+                fd_kw: dict = {'method': fd.get('method', 'opencv')}
+                if fd.get('min_face_size') is not None:
+                    fd_kw['min_face_size'] = int(fd['min_face_size'])
+                if fd.get('min_neighbors') is not None:
+                    fd_kw['min_neighbors'] = int(fd['min_neighbors'])
+                if fd.get('scale_factor') is not None:
+                    fd_kw['scale_factor'] = float(fd['scale_factor'])
+                self._face_detector = FaceDetector(**fd_kw)
             except Exception:
                 self.face_enabled = False
 
@@ -233,6 +246,17 @@ class ImageScanner:
             return 'video'
         return 'other'
 
+    @staticmethod
+    def _bgr_from_pil(pil_img):
+        """BGR ndarray for OpenCV when cv2.imread fails (e.g. HEIC via Pillow)."""
+        if not (CV2_OK and NP_OK and pil_img is not None):
+            return None
+        try:
+            rgb = np.asarray(pil_img.convert('RGB'), dtype=np.uint8)
+            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        except Exception:
+            return None
+
     def _extract(self, filepath):
         defaults = get_record_defaults()
         stat = filepath.stat()
@@ -302,34 +326,17 @@ class ImageScanner:
             except Exception:
                 pass
 
-            if self.face_enabled and self._face_detector and cv2_img is not None:
-                try:
-                    gray_face = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2GRAY)
-                    h_img = gray_face.shape[0]
-                    w_img = gray_face.shape[1]
-                    scale = 1.0
-                    max_dim = max(h_img, w_img)
-                    if max_dim > 1200:
-                        scale = 1200.0 / max_dim
-                        gray_face = cv2.resize(gray_face, None, fx=scale, fy=scale)
-                    cascade = getattr(self._face_detector, '_cascade_front', None)
-                    if cascade is not None:
-                        faces = cascade.detectMultiScale(
-                            gray_face,
-                            scaleFactor=1.1,
-                            minNeighbors=5,
-                            minSize=(30, 30)
-                        )
-                        count = len(faces) if faces is not None else 0
-                        defaults['face_count'] = count
-                        defaults['face_category'] = (
-                            'No People' if count == 0 else
-                            'Portrait' if count == 1 else
-                            'Small Group' if count <= 4 else
-                            'Large Group'
-                        )
-                except Exception:
-                    pass
+            if self.face_enabled and self._face_detector:
+                bgr = cv2_img
+                if bgr is None:
+                    bgr = self._bgr_from_pil(pil_img)
+                if bgr is not None:
+                    try:
+                        count, category, _boxes = self._face_detector.detect_from_image(bgr)
+                        defaults['face_count'] = int(count)
+                        defaults['face_category'] = category
+                    except Exception:
+                        pass
 
             if self.thumb_enabled and self._thumb_generator and pil_img:
                 try:

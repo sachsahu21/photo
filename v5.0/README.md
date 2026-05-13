@@ -46,7 +46,7 @@ python main.py
    Builds face embedding DB from library source (`faces.library_source`).
 
 6. `People Tag Sync + Untagged Samples`  
-   Applies seed matches into metadata. Unknown persons are assigned IDs and sample images are exported (up to 5 each) to `faces.untagged_root`.
+   Applies seed matches into metadata. Unknown persons get IDs; optional samples go to `faces.untagged_root` (see `faces.untagged_max_samples`, `faces.untagged_pick_best_quality`, `faces.untagged_export_mode`). Seed matches use `faces.similarity_threshold` or `faces.similarity_threshold_percent` (0–100, overrides the float).
 
 7. `Seed Feedback Refresh`  
    After you rename unknown person folders and move them into seed root, run again to refresh metadata person labels.
@@ -76,7 +76,12 @@ Set these before running:
 - `faces.seed_root`: person seed folders (one person per subfolder).
 - `faces.library_source`: `scan` or `organized` (should match where paths in metadata/index should resolve after organize).
 - `faces.index_db`: SQLite file path for face index.
+- `faces.similarity_threshold`: cosine 0.0–1.0; higher = stricter seed matches (e.g. `0.8`).
+- `faces.similarity_threshold_percent`: optional 0–100; when set, overrides `similarity_threshold`.
 - `faces.untagged_root`: output folder for unknown-person samples.
+- `faces.untagged_max_samples`: max files per unknown id (default `1`).
+- `faces.untagged_pick_best_quality`: when max is 1, replace export if a sharper / higher-quality image is seen later.
+- `faces.untagged_export_mode`: `full` (copy file) or `face_crop` (largest OpenCV face JPEG; falls back to full).
 
 ## Notes
 

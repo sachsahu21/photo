@@ -99,12 +99,20 @@ faces:
   library_source: "scan"
   # SQLite DB path to store embeddings (relative paths are resolved from v4.1/)
   index_db: "./face_index.sqlite"
-  # Similarity threshold (cosine). Higher = stricter.
+  # Cosine similarity 0.0-1.0 for seed match; higher = stricter (e.g. 0.8 ~= 80%).
   similarity_threshold: 0.35
+  # If set (0-100), overrides similarity_threshold (e.g. 80 means 0.8).
+  similarity_threshold_percent: null
   # Maximum matches to print/export
   max_results: 200
-  # Folder for unknown-person sample export (max 5 samples/person)
+  # Folder for unknown-person sample export
   untagged_root: "./untagged_people"
+  # Max image files per unknown id folder (1 recommended to save disk).
+  untagged_max_samples: 1
+  # When max_samples is 1: keep replacing with a sharper / higher-quality candidate (blur + quality + res).
+  untagged_pick_best_quality: true
+  # full = copy image; face_crop = largest OpenCV face JPEG (falls back to full).
+  untagged_export_mode: "full"
 
 organization:
   # Final organized library root
@@ -190,7 +198,7 @@ metadata:
   #   update_missing  = fill/add new keys only (recommended default)
   #   refresh         = recompute known keys and keep extensible payload
   #   full_overwrite  = rebuild json from current scan record
-  update_strategy: "update_missing"
+  update_strategy: "skip_if_present"
   schema_version: "1.0"
   tool_version: "v5.1"
 
@@ -217,6 +225,10 @@ face_detection:
   # method options currently: "opencv"
   enabled: true
   method: "opencv"
+  # Haar tuning (optional). Smaller min_face_size / min_neighbors detects more faces (more false positives).
+  min_face_size: 24
+  min_neighbors: 4
+  scale_factor: 1.08
 
 thumbnails:
   # Generate small thumbnails for preview workflows

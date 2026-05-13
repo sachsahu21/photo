@@ -61,13 +61,32 @@ class FaceIndexer:
         self.seed_root = Path(self.faces_cfg.get("seed_root", "") or "")
         self.target_person = str(self.faces_cfg.get("target_person", "")).strip()
         self.library_source = str(self.faces_cfg.get("library_source", "scan")).lower()
-        self.sim_thr = float(self.faces_cfg.get("similarity_threshold", 0.35))
+        self.sim_thr = self._resolve_similarity_threshold(self.faces_cfg)
         self.max_results = int(self.faces_cfg.get("max_results", 200))
         self.index_db = Path(self.faces_cfg.get("index_db", "./face_index.sqlite"))
 
         self._torch, self._PILImage, self._MTCNN, self._Resnet = _try_import_facenet()
         self._mtcnn = None
         self._resnet = None
+
+    @staticmethod
+    def _resolve_similarity_threshold(faces_cfg: Dict[str, Any]) -> float:
+        """
+        Cosine similarity in [0, 1]. Higher = stricter (fewer matches).
+        If similarity_threshold_percent is set (0-100), it overrides similarity_threshold.
+        """
+        pct = faces_cfg.get("similarity_threshold_percent")
+        if pct is not None:
+            if not (isinstance(pct, str) and not str(pct).strip()):
+                try:
+                    v = float(pct)
+                    return max(0.0, min(1.0, v / 100.0))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            return max(0.0, min(1.0, float(faces_cfg.get("similarity_threshold", 0.35))))
+        except (TypeError, ValueError):
+            return 0.35
 
     def _require_enabled(self):
         if not self.enabled:

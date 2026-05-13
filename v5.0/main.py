@@ -291,8 +291,23 @@ def task_6(config, logger):
         fi = FaceIndexer(config.to_dict())
         matches = fi.find_person()
         untagged_root = Path(config.get('faces.untagged_root', './untagged_people'))
+        try:
+            ums = int(config.get('faces.untagged_max_samples', 1) or 1)
+        except (TypeError, ValueError):
+            ums = 1
+        ums = max(1, min(20, ums))
+        pick_q = config.get('faces.untagged_pick_best_quality', True)
+        if isinstance(pick_q, str):
+            pick_q = pick_q.strip().lower() in ('1', 'true', 'yes', 'on')
         known, unknown = sync_people_tags(
-            records, matches, untagged_root, export_untagged=True, seed_only_refresh=False
+            records,
+            matches,
+            untagged_root,
+            export_untagged=True,
+            seed_only_refresh=False,
+            untagged_max_samples=ums,
+            untagged_pick_best_quality=bool(pick_q),
+            untagged_export_mode=str(config.get('faces.untagged_export_mode', 'full') or 'full'),
         )
         save_bk(records)
         print(f'  Known tagged: {known} | Unknown tagged: {unknown}')
