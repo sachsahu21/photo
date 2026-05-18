@@ -13,8 +13,17 @@ from src.excel_writer import ExcelWriter
 from src.face_indexer import FaceIndexer
 from src.metadata_store import MetadataStore
 from src.people_sync import sync_people_tags
+from src.metadata_reconcile import reconcile_vault_paths, auto_reconcile_if_enabled
 
-BK = 'records-backup.pkl'
+
+def records_backup_path(config) -> Path:
+    root = str(config.get('workspace.root', '') or '').strip()
+    if root:
+        try:
+            return Path(root).expanduser().resolve() / 'records-backup.pkl'
+        except OSError:
+            pass
+    return Path('records-backup.pkl')
 
 
 def setup_log(config):
@@ -31,23 +40,26 @@ def setup_log(config):
     return logging.getLogger(__name__)
 
 
-def save_bk(records):
+def save_bk(records, config):
+    path = records_backup_path(config)
     try:
-        with open(BK, 'wb') as f:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'wb') as f:
             pickle.dump(records, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print('  Backup: ' + str(len(records)) + ' records')
+        print('  Backup: ' + str(len(records)) + ' records -> ' + str(path))
     except Exception as e:
         print('  Backup failed: ' + str(e))
 
 
-def load_bk():
-    if not Path(BK).exists():
+def load_bk(config):
+    path = records_backup_path(config)
+    if not path.exists():
         print('  No backup')
         return None
     try:
-        with open(BK, 'rb') as f:
+        with open(path, 'rb') as f:
             r = pickle.load(f)
-        print('  Loaded ' + str(len(r)) + ' records')
+        print('  Loaded ' + str(len(r)) + ' records from ' + str(path))
         return r
     except Exception as e:
         print('  Load error: ' + str(e))
@@ -101,13 +113,13 @@ def task_1(config, logger):
         md_store = MetadataStore(config.to_dict())
         records = md_store.upsert_records(records)
         print('  Metadata JSON: ' + str(len(records)) + ' records')
-        save_bk(records)
+        save_bk(records, config)
         return str(md_store.root)
     except Exception as e:
         logger.error('Task 1: %s', e, exc_info=True)
         print('  Error: ' + str(e))
         if records:
-            save_bk(records)
+            save_bk(records, config)
         return None
 
 
@@ -115,7 +127,7 @@ def task_1b(config, logger):
     print('\n  STEP 2: GENERATE EXCEL FROM METADATA')
     records = MetadataStore(config.to_dict()).load_records()
     if not records:
-        records = load_bk()
+        records = load_bk(config)
     if not records:
         return None
     if config.get('workflow.reset_dup_sim_for_excel', False):
@@ -138,7 +150,17 @@ def task_1b(config, logger):
     return ep
 
 
-def task_2(ep, logger):
+def task_reconcile_paths(config, logger):
+    print('\n  UPDATE VAULT FULL PATHS (fast reconcile)')
+    print('  ' + '=' * 50)
+    try:
+        reconcile_vault_paths(config.to_dict())
+    except Exception as e:
+        logger.error('Reconcile: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
+def task_2(ep, config, logger):
     print('\n  STEP 3: APPLY EXCEL DELETE ACTIONS')
     try:
         import openpyxl
@@ -212,6 +234,7 @@ def task_2(ep, logger):
                     pass
         print('  Images Deleted: ' + str(ok) + ' | Missing: ' + str(nf) + ' | Errors: ' + str(er))
         print('  Metadata Deleted: ' + str(m_ok) + ' | Missing: ' + str(m_nf))
+        auto_reconcile_if_enabled(config.to_dict(), 'after delete')
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -257,6 +280,7 @@ def task_3(ep, config, logger):
         s = sum(1 for m in mvs if m['status'] == 'Success')
         e = sum(1 for m in mvs if 'Error' in m['status'])
         print('  Done: ' + str(s) + ' success, ' + str(e) + ' errors')
+        auto_reconcile_if_enabled(config.to_dict(), 'after organize')
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -283,7 +307,7 @@ def task_6(config, logger):
         md_store = MetadataStore(config.to_dict())
         records = md_store.load_records()
         if not records:
-            records = load_bk()
+            records = load_bk(config)
         if not records:
             print('  No records. Run Step 1 first.')
             return None
@@ -309,7 +333,7 @@ def task_6(config, logger):
             untagged_pick_best_quality=bool(pick_q),
             untagged_export_mode=str(config.get('faces.untagged_export_mode', 'full') or 'full'),
         )
-        save_bk(records)
+        save_bk(records, config)
         print(f'  Known tagged: {known} | Unknown tagged: {unknown}')
         print(f'  Untagged samples folder: {untagged_root}')
         return True
@@ -325,7 +349,7 @@ def task_7(config, logger):
         md_store = MetadataStore(config.to_dict())
         records = md_store.load_records()
         if not records:
-            records = load_bk()
+            records = load_bk(config)
         if not records:
             print('  No records. Run Step 1 first.')
             return None
@@ -335,7 +359,7 @@ def task_7(config, logger):
         known, unknown = sync_people_tags(
             records, matches, untagged_root, export_untagged=False, seed_only_refresh=True
         )
-        save_bk(records)
+        save_bk(records, config)
         print(f'  Known re-tagged: {known}')
         return True
     except Exception as e:
@@ -365,6 +389,7 @@ def task_convert_structure(config, logger):
         print('  Cancelled')
         return
     ImageOrganizer.convert_structure(source, target, target_folder)
+    auto_reconcile_if_enabled(config.to_dict(), 'after convert structure')
 
 
 def task_merge_dates(config, logger):
@@ -384,11 +409,116 @@ def task_merge_dates(config, logger):
         print('  Cancelled')
         return
     ImageOrganizer.merge_duplicate_dates(source, structure)
+    auto_reconcile_if_enabled(config.to_dict(), 'after merge same-date')
 
 
 def task_8(config, logger):
     print('\n  STEP 8: REFRESH FINAL EXCEL FROM METADATA')
     return task_1b(config, logger)
+
+
+def _vault_line(config) -> str:
+    lines = []
+    ws = str(config.get('workspace.root', '') or '').strip()
+    if ws:
+        try:
+            wr = str(Path(ws).expanduser().resolve())
+        except OSError:
+            wr = ws
+        lines.append('  Workspace: ' + wr)
+    rf = str(config.get('metadata.root_folder', '') or '').strip()
+    lr = str(config.get('metadata.library_root', '') or '').strip()
+    if rf:
+        lines.append('  Metadata vault: ' + rf)
+    else:
+        lines.append('  Metadata vault: <scan>/metadata (root_folder empty)')
+    if lr:
+        lines.append('  Library root: ' + lr)
+    return '\n'.join(lines)
+
+
+def menu_metadata(config, logger, last_excel):
+    while True:
+        print('')
+        print('  --- Metadata & Excel ---')
+        print(_vault_line(config))
+        ar = config.get('metadata.auto_reconcile_paths', True)
+        print('  Auto reconcile after delete/organize: ' + ('on' if ar else 'off'))
+        print('  1.  Generate / Refresh Metadata')
+        print('  2.  Generate Excel from Metadata')
+        print('  3.  Apply Excel Delete Actions')
+        print('  4.  Refresh Final Excel')
+        print('  5.  Update vault full paths  (always runs; ignores auto setting)')
+        print('  0.  Back')
+        ch = input('  Choice: ').strip().lower()
+        if ch == '0':
+            return last_excel
+        if ch == '1':
+            task_1(config, logger)
+        elif ch == '2':
+            last_excel = task_1b(config, logger) or last_excel
+        elif ch == '3':
+            p = input('  Excel (Enter=last): ').strip() or last_excel
+            if p and Path(p).exists():
+                task_2(p, config, logger)
+            else:
+                print('  Not found')
+        elif ch == '4':
+            last_excel = task_8(config, logger) or last_excel
+        elif ch == '5':
+            task_reconcile_paths(config, logger)
+        else:
+            print('  Invalid')
+        input('\n  Enter to continue...')
+
+
+def menu_organize(config, logger, last_excel):
+    while True:
+        print('')
+        print('  --- Organize library ---')
+        print('  Output: ' + str(config.get('organization.output_folder', '')))
+        print('  1.  Organize from Excel')
+        print('  2.  Convert folder structure')
+        print('  3.  Merge same-date folders')
+        print('  0.  Back')
+        ch = input('  Choice: ').strip().lower()
+        if ch == '0':
+            return
+        if ch == '1':
+            p = input('  Excel (Enter=last): ').strip() or last_excel
+            if p and Path(p).exists():
+                task_3(p, config, logger)
+            else:
+                print('  Not found')
+        elif ch == '2':
+            task_convert_structure(config, logger)
+        elif ch == '3':
+            task_merge_dates(config, logger)
+        else:
+            print('  Invalid')
+        input('\n  Enter to continue...')
+
+
+def menu_faces(config, logger):
+    while True:
+        print('')
+        print('  --- Faces ---')
+        print('  1.  Build / Update Face Index')
+        print('  2.  People Tag Sync + Untagged Samples')
+        print('  3.  Seed Feedback Refresh')
+        print('  0.  Back')
+        ch = input('  Choice: ').strip().lower()
+        if ch == '0':
+            return
+        if ch == '1':
+            task_5(config, logger)
+        elif ch == '2':
+            task_6(config, logger)
+        elif ch == '3':
+            task_7(config, logger)
+        else:
+            print('  Invalid')
+        input('\n  Enter to continue...')
 
 
 def main():
@@ -400,6 +530,12 @@ def main():
         config = ConfigManager()
         logger = setup_log(config)
         print('  Config: ' + str(config.config_path))
+        ws = str(config.get('workspace.root', '') or '').strip()
+        if ws:
+            try:
+                print('  Workspace: ' + str(Path(ws).expanduser().resolve()))
+            except OSError:
+                print('  Workspace: ' + ws)
         print('  Scan: ' + str(config.get('scan.folder_path')))
         print('  Structure: ' + str(config.get('organization.folder_structure', 'year')))
         ft = []
@@ -417,50 +553,22 @@ def main():
         if not config.validate():
             if input('  Continue? (yes/no): ').strip().lower() != 'yes':
                 return
-        last = None
+        last_excel = None
         while True:
             print('')
-            print('  1.  Generate / Refresh Metadata')
-            print('  2.  Generate Excel from Metadata')
-            print('  3.  Apply Excel Delete Actions')
-            print('  4.  Organize Images + Metadata')
-            print('  5.  Build/Update Face Index')
-            print('  6.  People Tag Sync + Untagged Samples')
-            print('  7.  Seed Feedback Refresh')
-            print('  8.  Refresh Final Excel')
-            print('  9.  Convert Folder Structure')
-            print('  10. Merge Same-Date Folders')
+            print(_vault_line(config))
+            print('  1.  Metadata & Excel')
+            print('  2.  Organize library')
+            print('  3.  Faces')
             print('  0.  Exit')
             print('')
             ch = input('  Choice: ').strip().lower()
             if ch == '1':
-                task_1(config, logger)
+                last_excel = menu_metadata(config, logger, last_excel) or last_excel
             elif ch == '2':
-                last = task_1b(config, logger)
+                menu_organize(config, logger, last_excel)
             elif ch == '3':
-                p = input('  Excel (Enter=last): ').strip() or last
-                if p and Path(p).exists():
-                    task_2(p, logger)
-                else:
-                    print('  Not found')
-            elif ch == '4':
-                p = input('  Excel (Enter=last): ').strip() or last
-                if p and Path(p).exists():
-                    task_3(p, config, logger)
-                else:
-                    print('  Not found')
-            elif ch == '5':
-                task_5(config, logger)
-            elif ch == '6':
-                task_6(config, logger)
-            elif ch == '7':
-                task_7(config, logger)
-            elif ch == '8':
-                task_8(config, logger)
-            elif ch == '9':
-                task_convert_structure(config, logger)
-            elif ch == '10':
-                task_merge_dates(config, logger)
+                menu_faces(config, logger)
             elif ch == '0':
                 print('\n  Bye!')
                 break

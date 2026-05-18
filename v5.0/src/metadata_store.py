@@ -8,6 +8,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .metadata_paths import apply_media_path_to_doc, resolve_absolute_from_doc
+
 
 def _ensure_json_serializable(obj: Any) -> Any:
     """Deep-convert values so json.dumps never hits datetime/Path/tuple/etc."""
@@ -62,6 +64,8 @@ class MetadataStore:
         self.schema_version = str(meta_cfg.get("schema_version", "1.0"))
         self.tool_version = str(meta_cfg.get("tool_version", "v5.1"))
         self.index_path = self.root / "metadata-index.json"
+        # When true, load_records() walks subfolders under root (e.g. legacy nested .../metadata/*.json).
+        self.load_recursive = bool(meta_cfg.get("load_recursive", False))
 
     def _json_path_for_record(self, rec: Dict[str, Any]) -> Path:
         src = str(rec.get("full_path", "")).strip()
@@ -169,6 +173,12 @@ class MetadataStore:
             }
         )
         base["record"] = _ensure_json_serializable(dict(rec))
+        fp = str(rec.get("full_path", "") or "").strip()
+        if fp:
+            try:
+                apply_media_path_to_doc(base, Path(fp), self.config)
+            except (OSError, ValueError):
+                pass
         return base
 
     def _apply_person_from_doc(self, rec: Dict[str, Any], doc: Dict[str, Any]) -> None:
@@ -204,11 +214,15 @@ class MetadataStore:
         d = doc.get("dates", {}) or {}
         q = doc.get("quality", {}) or {}
         k = doc.get("kpi", {}) or {}
+        abs_p = resolve_absolute_from_doc(doc, self.config)
+        full_path = str(abs_p) if abs_p else f.get("full_path", "")
+        folder = str(abs_p.parent) if abs_p else f.get("folder", "")
         rec.update({
             "media_id": f.get("media_id", ""),
             "filename": f.get("filename", ""),
-            "full_path": f.get("full_path", ""),
-            "folder": f.get("folder", ""),
+            "full_path": full_path,
+            "folder": folder,
+            "relative_path": f.get("relative_path", ""),
             "file_type": f.get("file_type", ""),
             "extension": f.get("extension", ""),
             "size_mb": f.get("size_mb", 0),
@@ -282,7 +296,14 @@ class MetadataStore:
         if not self.root.exists():
             return []
         records = []
-        for jp in sorted(self.root.glob("*.json")):
+        if self.load_recursive:
+            json_paths = sorted(
+                (p for p in self.root.rglob("*.json") if p.name != self.index_path.name),
+                key=lambda p: str(p),
+            )
+        else:
+            json_paths = sorted(self.root.glob("*.json"))
+        for jp in json_paths:
             if jp.name == self.index_path.name:
                 continue
             try:

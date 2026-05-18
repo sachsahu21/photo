@@ -2,6 +2,13 @@
 # IMAGE SCANNER v4.1 - CONFIGURATION
 # ============================================================
 
+# Optional: set one folder for all tool artifacts (metadata vault JSON, face DB,
+# reports, comparisons, thumbnails, logs, scan checkpoint, records-backup.pkl).
+# Leave empty to keep paths as written below. Relative paths under each key are
+# rewritten under this root; absolute paths in YAML are not changed.
+workspace:
+  root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\artifacts"
+
 scan:
   # Source folder to scan (images/videos)
   # Example: "D:\\Photos\\Unorganized"
@@ -192,14 +199,28 @@ output:
 
 
 metadata:
-  # Empty = <scan.folder_path>/metadata
+  # Metadata vault JSON folder. Empty = workspace.root/metadata when workspace.root is set,
+  # otherwise <scan.folder_path>/metadata. Do not use an absolute path here if you want
+  # metadata under workspace.root.
   root_folder: ""
+  # Parent of partial scan folders (e.g. folder1 containing folder2 + folder3). Enables relative_path in JSON.
+  # After copying library to HDD, change only this path and run "Update vault full paths".
+  library_root: ""
+  store_relative_paths: true
+  # organized | scan — which location reconcile prefers when both exist (copy + organize)
+  reconcile_prefer: "organized"
+  # true = load every *.json under root_folder recursively (legacy nested layout).
+  load_recursive: false
+  # true = auto path reconcile after delete, organize, convert, merge (menu option 5 always runs)
+  auto_reconcile_paths: true
+  # true = remove vault JSON when file not found anywhere (use with care)
+  reconcile_remove_missing: false
   # Options:
   #   skip_if_present = do not touch existing json
   #   update_missing  = fill/add new keys only (recommended default)
   #   refresh         = recompute known keys and keep extensible payload
   #   full_overwrite  = rebuild json from current scan record
-  update_strategy: "skip_if_present"
+  update_strategy: "update_missing"
   schema_version: "1.0"
   tool_version: "v5.1"
 
@@ -217,6 +238,8 @@ processing:
   # Resume support for long scans
   checkpoint_enabled: true
   checkpoint_interval: 100
+  # Scan resume file (default .scan_checkpoint.json under workspace when workspace.root is set)
+  checkpoint_file: ""
   # fast_mode true = skip expensive operations where supported
   fast_mode: false
   # false = include video hash in duplicate logic (slower but stronger)

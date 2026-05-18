@@ -76,6 +76,7 @@ class ImageScanner:
         self.parallel_workers = proc_cfg.get('threads', 0)
         self.checkpoint_enabled = proc_cfg.get('checkpoint_enabled', False)
         self.checkpoint_interval = proc_cfg.get('checkpoint_interval', 100)
+        self.checkpoint_file = proc_cfg.get('checkpoint_file') or None
         self.fast_mode = proc_cfg.get('fast_mode', False)
         self.skip_video_hash = proc_cfg.get('skip_video_hash', True)
 
@@ -169,7 +170,10 @@ class ImageScanner:
         checkpoint = None
         if self.checkpoint_enabled:
             from .checkpoint_manager import CheckpointManager
-            checkpoint = CheckpointManager(interval=self.checkpoint_interval)
+            checkpoint = CheckpointManager(
+                interval=self.checkpoint_interval,
+                file_path=self.checkpoint_file,
+            )
             if checkpoint.load():
                 files = [f for f in files if not checkpoint.is_processed(str(f))]
 

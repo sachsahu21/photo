@@ -86,6 +86,7 @@ class ExcelWriter:
         ('md5_hash', 'MD5 Hash', 36),
         ('file_modified', 'File Modified', 20),
         ('full_path', 'Full Path', 60),
+        ('relative_path', 'Relative Path', 45),
         ('error', 'Read Error', 30),
     ]
 
@@ -112,6 +113,7 @@ class ExcelWriter:
         ('delete_flag', 'DELETE? (Yes/No)', 16),
         ('md5_hash', 'MD5 Hash', 36),
         ('full_path', 'Full Path', 60),
+        ('relative_path', 'Relative Path', 45),
     ]
 
     BLUR_COLS = [

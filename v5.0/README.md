@@ -26,6 +26,16 @@ cd v5.0
 python main.py
 ```
 
+## Workspace root (single folder for artifacts)
+
+Set `workspace.root` in `config.yaml` to one directory (for example a folder on an external drive). When non-empty, the loader resolves these **relative** paths under that root: `metadata.root_folder`, `faces.data_folder` / `faces.index_db` / `faces.untagged_root`, `output.output_folder`, `comparison.output_folder`, `thumbnails.output_folder`, `logging.file`, `processing.checkpoint_file`, and the pickle backup `records-backup.pkl` used by the app lives at `<workspace>/records-backup.pkl`. Paths that are already **absolute** in YAML are left as-is; clear or shorten them if you want everything to follow `workspace.root`. Photo sources (`scan.folder_path`, `organization.output_folder`, `faces.seed_root`) are not moved automatically.
+
+## Menu
+
+- **1. Metadata & Excel** — scan metadata, Excel, deletes, refresh Excel, **Update vault full paths** (fast reconcile; always available).
+- **2. Organize library** — organize from Excel, convert structure, merge same-date folders.
+- **3. Faces** — face index, people sync, seed refresh.
+
 ## Run sequence (menu steps)
 
 1. `Generate / Refresh Metadata`  
@@ -33,14 +43,14 @@ python main.py
    When `duplicates.enabled` / `similar_detection.enabled` are on, duplicate and similar flags are computed during this step.
 
 2. `Generate Excel from Metadata`  
-   Reads JSON metadata and builds Excel report.  
+   Reads JSON from `metadata.root_folder` (or `<scan.folder_path>/metadata` if `root_folder` is empty) and builds Excel. Use `metadata.load_recursive: true` only if JSON lives in subfolders under that root.  
    If `workflow.reset_dup_sim_for_excel` is `true`, `Duplicate?` / `Similar?` are reset to `No` in the workbook source before generation (use when you want a clean sheet from metadata).
 
 3. `Apply Excel Delete Actions`  
    Deletes rows marked in Excel (`DELETE?`, `Duplicate?`, `Similar?`) and deletes linked metadata JSON.
 
 4. `Organize Images + Metadata`  
-   Organizes files by config and moves/copies matching metadata JSON into target `.../metadata/`.
+   Organizes files by config. If `metadata.root_folder` is **set** (vault), JSON **stays** in that folder and `file.full_path` / `organized_path` in JSON are updated to the organized image path. If `root_folder` is **empty**, JSON is moved/copied next to the organized media under `.../metadata/`.
 
 5. `Build/Update Face Index`  
    Builds face embedding DB from library source (`faces.library_source`).
@@ -68,7 +78,14 @@ Set these before running:
 - `organization.output_folder`: target organized folder.
 - `organization.folder_structure`: `flat` / `year` / `year-month-date`.
 - `organization.operation`: `copy` or `move`.
-- `metadata.root_folder`: optional; empty means `<scan.folder_path>/metadata`.
+- `workspace.root`: optional single root for tool artifacts (metadata vault, face data, reports, comparisons, thumbnails, logs, checkpoint, `records-backup.pkl`). Empty = use each path in YAML as given.
+- `metadata.root_folder`: optional absolute path = single shared metadata vault (good for multiple partial scans, one Excel). Empty = `<scan.folder_path>/metadata`.
+- `metadata.load_recursive`: `true` to load all `*.json` under `root_folder` recursively.
+- `metadata.library_root`: parent folder for partial scans (e.g. `folder1` with `folder2` + `folder3`). When set, JSON stores **`relative_path`** so you can move the tree to another disk by changing only this path.
+- `metadata.store_relative_paths`: `true` (default when `library_root` is set) writes `file.relative_path` in vault JSON.
+- `metadata.reconcile_prefer`: `organized` or `scan` — when both copies exist, reconcile updates to the preferred location.
+- `metadata.auto_reconcile_paths`: `true` = auto-fix vault paths after delete, organize, convert, merge; `false` = off (menu **Update vault full paths** still runs).
+- `metadata.reconcile_remove_missing`: `true` = delete vault JSON when the image file is gone everywhere.
 - `metadata.update_strategy`: `skip_if_present` / `update_missing` / `refresh` / `full_overwrite`.
 - `workflow.reset_dup_sim_for_excel`: if `true`, step 2 clears duplicate/similar columns before writing Excel.
 - `duplicates.enabled` / `similar_detection.enabled`: control whether step 1 fills those signals.

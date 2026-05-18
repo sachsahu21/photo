@@ -20,6 +20,7 @@ class ConfigManager:
     def _load(self):
         if not self.config_path.exists():
             self.config = self._defaults()
+            self._apply_workspace_root()
             return
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -27,9 +28,94 @@ class ConfigManager:
             self.config = loaded if isinstance(loaded, dict) else self._defaults()
         except Exception:
             self.config = self._defaults()
+        self._apply_workspace_root()
+
+    @staticmethod
+    def _is_absolute_path(s: str) -> bool:
+        s = (s or '').strip().replace('/', '\\')
+        if not s:
+            return False
+        if len(s) >= 2 and s[0] == '\\' and s[1] == '\\':
+            return True
+        if len(s) >= 3 and s[1] == ':' and s[2] in ('\\', '/'):
+            return True
+        return False
+
+    def _apply_workspace_root(self):
+        """
+        When workspace.root is set, resolve tool artifact paths under that folder
+        (metadata, faces, reports, comparisons, thumbnails, logs, scan checkpoint, backup).
+        Absolute paths in YAML are left unchanged.
+        """
+        ws_cfg = self.config.get('workspace') or {}
+        root = str(ws_cfg.get('root', '') or '').strip()
+        if not root:
+            return
+        try:
+            W = Path(root).expanduser().resolve()
+            W.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning('workspace.root mkdir failed %s: %s', root, e)
+            try:
+                W = Path(root).expanduser().resolve()
+            except OSError:
+                return
+
+        def get(keys):
+            d = self.config
+            for k in keys:
+                if not isinstance(d, dict):
+                    return ''
+                d = d.get(k)
+            return d
+
+        def setv(keys, value: str):
+            d = self.config
+            for k in keys[:-1]:
+                if k not in d or not isinstance(d[k], dict):
+                    d[k] = {}
+                d = d[k]
+            d[keys[-1]] = value
+
+        def join_if_not_abs(keys, subdir: str):
+            cur = get(keys)
+            cur_s = str(cur if cur is not None else '').strip()
+            if self._is_absolute_path(cur_s):
+                return
+            if not cur_s or cur_s.startswith('./') or not Path(cur_s).is_absolute():
+                setv(keys, str(W / subdir))
+
+        join_if_not_abs(['metadata', 'root_folder'], 'metadata')
+
+        join_if_not_abs(['faces', 'data_folder'], 'face_data')
+
+        idx = str(get(['faces', 'index_db']) or '').strip()
+        if not self._is_absolute_path(idx):
+            data = str(get(['faces', 'data_folder']) or str(W / 'face_data'))
+            name = Path(idx).name if idx else 'face_index.sqlite'
+            if not name.endswith('.sqlite') and not name.endswith('.db'):
+                name = 'face_index.sqlite'
+            setv(['faces', 'index_db'], str(Path(data) / name))
+
+        join_if_not_abs(['faces', 'untagged_root'], 'untagged_people')
+
+        join_if_not_abs(['output', 'output_folder'], 'reports')
+
+        join_if_not_abs(['comparison', 'output_folder'], 'comparisons')
+
+        join_if_not_abs(['thumbnails', 'output_folder'], 'thumbnails')
+
+        lf = str(get(['logging', 'file']) if get(['logging', 'file']) is not None else '').strip()
+        if not self._is_absolute_path(lf):
+            setv(['logging', 'file'], str(W / 'logs' / 'image-scanner.log'))
+
+        ck = str(get(['processing', 'checkpoint_file']) if get(['processing', 'checkpoint_file']) is not None else '').strip()
+        if not self._is_absolute_path(ck):
+            setv(['processing', 'checkpoint_file'], str(W / '.scan_checkpoint.json'))
 
     def _defaults(self):
         return {
+            'workspace': {'root': ''},
             'scan': {
                 'folder_path': './sample_images',
                 'recursive': True,
@@ -101,6 +187,12 @@ class ConfigManager:
             },
             'metadata': {
                 'root_folder': '',
+                'library_root': '',
+                'store_relative_paths': True,
+                'reconcile_prefer': 'organized',
+                'load_recursive': False,
+                'auto_reconcile_paths': True,
+                'reconcile_remove_missing': False,
                 'update_strategy': 'update_missing',
                 'schema_version': '1.0',
                 'tool_version': 'v5.1',
@@ -129,6 +221,7 @@ class ConfigManager:
                 'verbose': False,
                 'checkpoint_enabled': True,
                 'checkpoint_interval': 100,
+                'checkpoint_file': '',
                 'fast_mode': False,
                 'skip_video_hash': True,
             },
