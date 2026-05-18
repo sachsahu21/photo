@@ -2,6 +2,8 @@ import yaml
 import logging
 from pathlib import Path
 
+from .workspace_paths import apply_workspace_artifacts, resolve_workspace_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,98 +22,24 @@ class ConfigManager:
     def _load(self):
         if not self.config_path.exists():
             self.config = self._defaults()
-            self._apply_workspace_root()
-            return
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                loaded = yaml.safe_load(f)
-            self.config = loaded if isinstance(loaded, dict) else self._defaults()
-        except Exception:
-            self.config = self._defaults()
+        else:
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    loaded = yaml.safe_load(f)
+                self.config = loaded if isinstance(loaded, dict) else self._defaults()
+            except Exception:
+                self.config = self._defaults()
         self._apply_workspace_root()
 
-    @staticmethod
-    def _is_absolute_path(s: str) -> bool:
-        s = (s or '').strip().replace('/', '\\')
-        if not s:
-            return False
-        if len(s) >= 2 and s[0] == '\\' and s[1] == '\\':
-            return True
-        if len(s) >= 3 and s[1] == ':' and s[2] in ('\\', '/'):
-            return True
-        return False
-
     def _apply_workspace_root(self):
-        """
-        When workspace.root is set, resolve tool artifact paths under that folder
-        (metadata, faces, reports, comparisons, thumbnails, logs, scan checkpoint, backup).
-        Absolute paths in YAML are left unchanged.
-        """
-        ws_cfg = self.config.get('workspace') or {}
-        root = str(ws_cfg.get('root', '') or '').strip()
-        if not root:
-            return
+        """Require workspace.root and resolve all artifact paths under it."""
         try:
-            W = Path(root).expanduser().resolve()
-            W.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            logger.warning('workspace.root mkdir failed %s: %s', root, e)
-            try:
-                W = Path(root).expanduser().resolve()
-            except OSError:
-                return
+            apply_workspace_artifacts(self.config)
+        except ValueError as e:
+            logger.error(str(e))
 
-        def get(keys):
-            d = self.config
-            for k in keys:
-                if not isinstance(d, dict):
-                    return ''
-                d = d.get(k)
-            return d
-
-        def setv(keys, value: str):
-            d = self.config
-            for k in keys[:-1]:
-                if k not in d or not isinstance(d[k], dict):
-                    d[k] = {}
-                d = d[k]
-            d[keys[-1]] = value
-
-        def join_if_not_abs(keys, subdir: str):
-            cur = get(keys)
-            cur_s = str(cur if cur is not None else '').strip()
-            if self._is_absolute_path(cur_s):
-                return
-            if not cur_s or cur_s.startswith('./') or not Path(cur_s).is_absolute():
-                setv(keys, str(W / subdir))
-
-        join_if_not_abs(['metadata', 'root_folder'], 'metadata')
-
-        join_if_not_abs(['faces', 'data_folder'], 'face_data')
-
-        idx = str(get(['faces', 'index_db']) or '').strip()
-        if not self._is_absolute_path(idx):
-            data = str(get(['faces', 'data_folder']) or str(W / 'face_data'))
-            name = Path(idx).name if idx else 'face_index.sqlite'
-            if not name.endswith('.sqlite') and not name.endswith('.db'):
-                name = 'face_index.sqlite'
-            setv(['faces', 'index_db'], str(Path(data) / name))
-
-        join_if_not_abs(['faces', 'untagged_root'], 'untagged_people')
-
-        join_if_not_abs(['output', 'output_folder'], 'reports')
-
-        join_if_not_abs(['comparison', 'output_folder'], 'comparisons')
-
-        join_if_not_abs(['thumbnails', 'output_folder'], 'thumbnails')
-
-        lf = str(get(['logging', 'file']) if get(['logging', 'file']) is not None else '').strip()
-        if not self._is_absolute_path(lf):
-            setv(['logging', 'file'], str(W / 'logs' / 'image-scanner.log'))
-
-        ck = str(get(['processing', 'checkpoint_file']) if get(['processing', 'checkpoint_file']) is not None else '').strip()
-        if not self._is_absolute_path(ck):
-            setv(['processing', 'checkpoint_file'], str(W / '.scan_checkpoint.json'))
+    def workspace_root(self) -> Path:
+        return resolve_workspace_root(self.config)
 
     def _defaults(self):
         return {
@@ -172,7 +100,7 @@ class ConfigManager:
                 'screenshot_custom_resolutions': [],
             },
             'output': {
-                'output_folder': './reports',
+                'subfolder': 'reports',
                 'filename_prefix': 'image-scan',
                 'sheets': {
                     'all_images': True,
@@ -186,7 +114,7 @@ class ConfigManager:
                 },
             },
             'metadata': {
-                'root_folder': '',
+                'subfolder': 'metadata',
                 'library_root': '',
                 'store_relative_paths': True,
                 'reconcile_prefer': 'organized',
@@ -205,12 +133,12 @@ class ConfigManager:
                 'seed_root': './seed',
                 'target_person': '',
                 'library_source': 'scan',
-                'data_folder': './face_data',
-                'index_db': './face_index.sqlite',
+                'data_subfolder': 'face_data',
+                'index_db_filename': 'face_index.sqlite',
                 'similarity_threshold': 0.8,
                 'similarity_threshold_percent': None,
                 'max_results': 200,
-                'untagged_root': './untagged_people',
+                'untagged_subfolder': 'untagged_people',
                 'untagged_max_samples': 1,
                 'untagged_pick_best_quality': True,
                 'untagged_export_mode': 'full',
@@ -221,7 +149,6 @@ class ConfigManager:
                 'verbose': False,
                 'checkpoint_enabled': True,
                 'checkpoint_interval': 100,
-                'checkpoint_file': '',
                 'fast_mode': False,
                 'skip_video_hash': True,
             },
@@ -234,8 +161,8 @@ class ConfigManager:
             },
             'thumbnails': {
                 'enabled': True,
+                'subfolder': 'thumbnails',
                 'size': [150, 100],
-                'output_folder': './thumbnails',
                 'embed_in_excel': False,
             },
             'clustering': {
@@ -251,13 +178,14 @@ class ConfigManager:
                 'top_k': 5,
                 'confidence_threshold': 0.3,
             },
-            'comparison': {'enabled': True, 'output_folder': './comparisons'},
+            'comparison': {'enabled': True, 'subfolder': 'comparisons'},
             'analytics': {'enabled': True},
             'cloud': {'enabled': False, 'provider': 'none'},
             'streamlit': {'enabled': True, 'port': 8501},
             'logging': {
                 'level': 'INFO',
-                'file': './logs/image-scanner.log',
+                'subfolder': 'logs',
+                'log_filename': 'image-scanner.log',
                 'console': True
             },
         }
@@ -286,8 +214,39 @@ class ConfigManager:
     def to_dict(self):
         return self.config.copy()
 
+    def artifact_summary(self):
+        """Resolved artifact paths for display."""
+        return {
+            'workspace': str(self.get('workspace._resolved_root') or self.get('workspace.root', '')),
+            'metadata': self.get('metadata.root_folder', ''),
+            'face_data': self.get('faces.data_folder', ''),
+            'face_index': self.get('faces.index_db', ''),
+            'untagged': self.get('faces.untagged_root', ''),
+            'reports': self.get('output.output_folder', ''),
+            'comparisons': self.get('comparison.output_folder', ''),
+            'thumbnails': self.get('thumbnails.output_folder', ''),
+            'log': self.get('logging.file', ''),
+            'checkpoint': self.get('processing.checkpoint_file', ''),
+            'backup': str(self.workspace_root() / 'records-backup.pkl'),
+        }
+
     def validate(self):
         errors = []
+        ws = str(self.get('workspace.root', '') or '').strip()
+        if not ws:
+            errors.append('workspace.root is required (all tool artifacts live under this folder)')
+        else:
+            try:
+                apply_workspace_artifacts(self.config)
+            except ValueError as e:
+                errors.append(str(e))
+            except OSError as e:
+                errors.append('workspace.root not usable: ' + str(e))
+
+        rf = str(self.get('metadata.root_folder', '') or '').strip()
+        if ws and not rf:
+            errors.append('metadata vault not resolved (check workspace.root)')
+
         sp = self.get('scan.folder_path')
         if not sp:
             errors.append('scan.folder_path required')
@@ -301,9 +260,12 @@ class ConfigManager:
                 ' (use flat, year, or year-month-date)'
             )
 
+        us = str(self.get('metadata.update_strategy', 'update_missing') or '').lower()
+        if us not in ('skip_if_present', 'update_missing', 'refresh', 'full_overwrite'):
+            errors.append('Invalid metadata.update_strategy: ' + us)
+
         if errors:
             print('\n  Config issues:')
             for e in errors:
                 print('    - ' + e)
         return len(errors) == 0
-

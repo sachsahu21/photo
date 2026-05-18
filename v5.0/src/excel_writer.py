@@ -150,7 +150,10 @@ class ExcelWriter:
 
     def __init__(self, config):
         out = config.get('output', {})
-        self.output_folder = Path(out.get('output_folder', './reports'))
+        out_path = out.get('output_folder')
+        if not out_path:
+            raise ValueError('output.output_folder not resolved; set workspace.root in config.yaml')
+        self.output_folder = Path(out_path)
         self.output_folder.mkdir(parents=True, exist_ok=True)
         self.prefix = out.get('filename_prefix', 'image-scan')
         sh = out.get('sheets', {})

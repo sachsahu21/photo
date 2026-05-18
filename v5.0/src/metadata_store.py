@@ -57,7 +57,11 @@ class MetadataStore:
 
         self.scan_root = Path(scan_cfg.get("folder_path", ".")).expanduser().resolve()
         root_cfg = str(meta_cfg.get("root_folder", "") or "").strip()
-        self.root = Path(root_cfg).expanduser().resolve() if root_cfg else (self.scan_root / "metadata")
+        if not root_cfg:
+            raise ValueError(
+                "metadata.root_folder not set; workspace.root is required in config.yaml"
+            )
+        self.root = Path(root_cfg).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
         self.strategy = str(meta_cfg.get("update_strategy", "update_missing")).strip().lower()

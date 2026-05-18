@@ -76,7 +76,7 @@ class ImageScanner:
         self.parallel_workers = proc_cfg.get('threads', 0)
         self.checkpoint_enabled = proc_cfg.get('checkpoint_enabled', False)
         self.checkpoint_interval = proc_cfg.get('checkpoint_interval', 100)
-        self.checkpoint_file = proc_cfg.get('checkpoint_file') or None
+        self.checkpoint_file = proc_cfg.get('checkpoint_file')
         self.fast_mode = proc_cfg.get('fast_mode', False)
         self.skip_video_hash = proc_cfg.get('skip_video_hash', True)
 
@@ -128,7 +128,7 @@ class ImageScanner:
                 from .thumbnail_generator import ThumbnailGenerator
                 thumb_cfg = self.config.get('thumbnails', {})
                 self._thumb_generator = ThumbnailGenerator(
-                    output_folder=thumb_cfg.get('output_folder', './thumbnails'),
+                    output_folder=thumb_cfg.get('output_folder'),
                     size=thumb_cfg.get('size', [150, 100])
                 )
             except Exception:
@@ -169,6 +169,10 @@ class ImageScanner:
 
         checkpoint = None
         if self.checkpoint_enabled:
+            if not self.checkpoint_file:
+                raise ValueError(
+                    'processing.checkpoint_file not resolved; set workspace.root in config.yaml'
+                )
             from .checkpoint_manager import CheckpointManager
             checkpoint = CheckpointManager(
                 interval=self.checkpoint_interval,

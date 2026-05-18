@@ -9,10 +9,12 @@ logger = logging.getLogger(__name__)
 
 class CheckpointManager:
     def __init__(self, interval=100, file_path=None):
+        if not file_path:
+            raise ValueError('checkpoint file_path required (set workspace.root in config.yaml)')
         self.interval = interval
         self.processed = set()
         self.count = 0
-        self._file = str(file_path) if file_path else '.scan_checkpoint.json'
+        self._file = str(file_path)
 
     def load(self):
         try:

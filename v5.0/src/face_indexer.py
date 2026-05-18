@@ -63,7 +63,9 @@ class FaceIndexer:
         self.library_source = str(self.faces_cfg.get("library_source", "scan")).lower()
         self.sim_thr = self._resolve_similarity_threshold(self.faces_cfg)
         self.max_results = int(self.faces_cfg.get("max_results", 200))
-        self.index_db = Path(self.faces_cfg.get("index_db", "./face_index.sqlite"))
+        self.index_db = Path(self.faces_cfg.get("index_db") or "")
+        if not str(self.index_db):
+            raise ValueError("faces.index_db not resolved; set workspace.root in config.yaml")
 
         self._torch, self._PILImage, self._MTCNN, self._Resnet = _try_import_facenet()
         self._mtcnn = None

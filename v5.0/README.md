@@ -26,9 +26,23 @@ cd v5.0
 python main.py
 ```
 
-## Workspace root (single folder for artifacts)
+## Workspace root (required)
 
-Set `workspace.root` in `config.yaml` to one directory (for example a folder on an external drive). When non-empty, the loader resolves these **relative** paths under that root: `metadata.root_folder`, `faces.data_folder` / `faces.index_db` / `faces.untagged_root`, `output.output_folder`, `comparison.output_folder`, `thumbnails.output_folder`, `logging.file`, `processing.checkpoint_file`, and the pickle backup `records-backup.pkl` used by the app lives at `<workspace>/records-backup.pkl`. Paths that are already **absolute** in YAML are left as-is; clear or shorten them if you want everything to follow `workspace.root`. Photo sources (`scan.folder_path`, `organization.output_folder`, `faces.seed_root`) are not moved automatically.
+`workspace.root` is **required**. The app will not start without it. All tool output is forced under this folder using `subfolder` names in config (never full paths for artifacts):
+
+| Subfolder key | Default name | Contents |
+|---------------|--------------|----------|
+| `metadata.subfolder` | `metadata` | JSON vault |
+| `faces.data_subfolder` | `face_data` | Face index DB |
+| `faces.untagged_subfolder` | `untagged_people` | Unknown-person samples |
+| `output.subfolder` | `reports` | Excel |
+| `comparison.subfolder` | `comparisons` | HTML reports |
+| `thumbnails.subfolder` | `thumbnails` | Preview JPEGs |
+| `logging.subfolder` | `logs` | Log file |
+
+Also at workspace root: `.scan_checkpoint.json`, `records-backup.pkl`.
+
+Photo libraries stay outside workspace: `scan.folder_path`, `organization.output_folder`, `faces.seed_root`.
 
 ## Menu
 
@@ -39,11 +53,11 @@ Set `workspace.root` in `config.yaml` to one directory (for example a folder on 
 ## Run sequence (menu steps)
 
 1. `Generate / Refresh Metadata`  
-   Scans `scan.folder_path` and writes JSON files under `<scan.folder_path>/metadata` (or `metadata.root_folder`).  
+   Scans `scan.folder_path` and writes JSON under `{workspace.root}/metadata/`.  
    When `duplicates.enabled` / `similar_detection.enabled` are on, duplicate and similar flags are computed during this step.
 
 2. `Generate Excel from Metadata`  
-   Reads JSON from `metadata.root_folder` (or `<scan.folder_path>/metadata` if `root_folder` is empty) and builds Excel. Use `metadata.load_recursive: true` only if JSON lives in subfolders under that root.  
+   Reads JSON from `{workspace.root}/metadata/`. Use `metadata.load_recursive: true` only if JSON lives in nested subfolders.  
    If `workflow.reset_dup_sim_for_excel` is `true`, `Duplicate?` / `Similar?` are reset to `No` in the workbook source before generation (use when you want a clean sheet from metadata).
 
 3. `Apply Excel Delete Actions`  
@@ -78,8 +92,8 @@ Set these before running:
 - `organization.output_folder`: target organized folder.
 - `organization.folder_structure`: `flat` / `year` / `year-month-date`.
 - `organization.operation`: `copy` or `move`.
-- `workspace.root`: optional single root for tool artifacts (metadata vault, face data, reports, comparisons, thumbnails, logs, checkpoint, `records-backup.pkl`). Empty = use each path in YAML as given.
-- `metadata.root_folder`: optional absolute path = single shared metadata vault (good for multiple partial scans, one Excel). Empty = `<scan.folder_path>/metadata`.
+- `workspace.root`: **required** absolute path for all tool artifacts.
+- `metadata.subfolder`: vault folder name under workspace (default `metadata`).
 - `metadata.load_recursive`: `true` to load all `*.json` under `root_folder` recursively.
 - `metadata.library_root`: parent folder for partial scans (e.g. `folder1` with `folder2` + `folder3`). When set, JSON stores **`relative_path`** so you can move the tree to another disk by changing only this path.
 - `metadata.store_relative_paths`: `true` (default when `library_root` is set) writes `file.relative_path` in vault JSON.

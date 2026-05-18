@@ -16,18 +16,13 @@ from src.people_sync import sync_people_tags
 from src.metadata_reconcile import reconcile_vault_paths, auto_reconcile_if_enabled
 
 
-def records_backup_path(config) -> Path:
-    root = str(config.get('workspace.root', '') or '').strip()
-    if root:
-        try:
-            return Path(root).expanduser().resolve() / 'records-backup.pkl'
-        except OSError:
-            pass
-    return Path('records-backup.pkl')
+from src.workspace_paths import records_backup_path
 
 
 def setup_log(config):
-    lf = config.get('logging.file', './logs/image-scanner.log')
+    lf = config.get('logging.file')
+    if not lf:
+        raise ValueError('logging.file not resolved; set workspace.root in config.yaml')
     Path(lf).parent.mkdir(parents=True, exist_ok=True)
     handlers = [logging.FileHandler(lf, encoding='utf-8')]
     if config.get('logging.console', True):
@@ -314,7 +309,7 @@ def task_6(config, logger):
 
         fi = FaceIndexer(config.to_dict())
         matches = fi.find_person()
-        untagged_root = Path(config.get('faces.untagged_root', './untagged_people'))
+        untagged_root = Path(config.get('faces.untagged_root'))
         try:
             ums = int(config.get('faces.untagged_max_samples', 1) or 1)
         except (TypeError, ValueError):
@@ -355,7 +350,7 @@ def task_7(config, logger):
             return None
         fi = FaceIndexer(config.to_dict())
         matches = fi.find_person()
-        untagged_root = Path(config.get('faces.untagged_root', './untagged_people'))
+        untagged_root = Path(config.get('faces.untagged_root'))
         known, unknown = sync_people_tags(
             records, matches, untagged_root, export_untagged=False, seed_only_refresh=True
         )
@@ -419,19 +414,14 @@ def task_8(config, logger):
 
 def _vault_line(config) -> str:
     lines = []
-    ws = str(config.get('workspace.root', '') or '').strip()
+    art = config.artifact_summary() if hasattr(config, 'artifact_summary') else {}
+    ws = art.get('workspace') or str(config.get('workspace.root', '') or '').strip()
     if ws:
-        try:
-            wr = str(Path(ws).expanduser().resolve())
-        except OSError:
-            wr = ws
-        lines.append('  Workspace: ' + wr)
-    rf = str(config.get('metadata.root_folder', '') or '').strip()
-    lr = str(config.get('metadata.library_root', '') or '').strip()
+        lines.append('  Workspace: ' + ws)
+    rf = art.get('metadata') or str(config.get('metadata.root_folder', '') or '').strip()
     if rf:
         lines.append('  Metadata vault: ' + rf)
-    else:
-        lines.append('  Metadata vault: <scan>/metadata (root_folder empty)')
+    lr = str(config.get('metadata.library_root', '') or '').strip()
     if lr:
         lines.append('  Library root: ' + lr)
     return '\n'.join(lines)
@@ -528,14 +518,14 @@ def main():
         print('       IMAGE SCANNER v5.0')
         print('  ========================================================')
         config = ConfigManager()
+        if not config.validate():
+            print('\n  Fix config.yaml and restart.')
+            sys.exit(1)
         logger = setup_log(config)
         print('  Config: ' + str(config.config_path))
-        ws = str(config.get('workspace.root', '') or '').strip()
-        if ws:
-            try:
-                print('  Workspace: ' + str(Path(ws).expanduser().resolve()))
-            except OSError:
-                print('  Workspace: ' + ws)
+        art = config.artifact_summary()
+        print('  Workspace: ' + str(art.get('workspace', '')))
+        print('  Artifacts: metadata, reports, face_data, ... under workspace')
         print('  Scan: ' + str(config.get('scan.folder_path')))
         print('  Structure: ' + str(config.get('organization.folder_structure', 'year')))
         ft = []
@@ -550,9 +540,6 @@ def main():
                 ft.append(n)
         if ft:
             print('  Features: ' + ', '.join(ft))
-        if not config.validate():
-            if input('  Continue? (yes/no): ').strip().lower() != 'yes':
-                return
         last_excel = None
         while True:
             print('')
