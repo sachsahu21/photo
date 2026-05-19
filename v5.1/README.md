@@ -1,174 +1,127 @@
-# Image Scanner v4.1
+# Image Scanner v5.0 (Metadata-First Workflow)
 
-Image Scanner v4.1 scans photos/videos, extracts metadata, detects duplicates, and organizes your media into date-based folders with Excel reporting.
+This version uses a metadata-first flow:
 
-## Highlights
+- generate per-file metadata JSON first,
+- generate Excel from metadata,
+- apply manual actions from Excel,
+- organize images and move linked metadata,
+- sync people tags using seed folders.
 
-- Reliable video metadata via ffprobe + MediaInfo + OpenCV fallback.
-- Excel report with summary, duplicates, blurry, analytics, and optional sheets.
-- Organization modes:
-  - `flat`
-  - `year`
-  - `year-month-date`
-- Folder conversion (Option 7) and same-date merge (Option 8).
-- Screenshot separation with keyword + resolution logic.
-- Unaligned folder support: keeps folder in place during conversion and can normalize count naming.
+## Setup
 
-## Install
-
-1. Create Python environment (recommended).
-2. Install dependencies:
+1. Create environment and install dependencies:
 
 ```bash
-pip install -r requirements.txt
+py -3.11 -m venv .venv311
+.venv311\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r v5.0/requirements.txt
 ```
 
-3. Optional tools for best video metadata:
-   - `ffprobe` (from FFmpeg) available in PATH
-   - MediaInfo runtime (for `pymediainfo`)
-
-## Run
-
-From repository root:
+2. Run from `v5.0` folder:
 
 ```bash
-python v4.1/main.py
+cd v5.0
+python main.py
 ```
 
-## Main Menu
+## Workspace root (required)
 
-- `1` Scan & Extract  
-  Scans configured source folder and builds records with metadata.
+`workspace.root` is **required**. The app will not start without it. All tool output is forced under this folder using `subfolder` names in config (never full paths for artifacts):
 
-- `1b` Resume Excel  
-  Regenerates report from backup records.
+| Subfolder key | Default name | Contents |
+|---------------|--------------|----------|
+| `metadata.subfolder` | `metadata` | JSON vault |
+| `faces.data_subfolder` | `face_data` | Face index DB |
+| `faces.untagged_subfolder` | `untagged_people` | Unknown-person samples |
+| `output.subfolder` | `reports` | Excel |
+| `comparison.subfolder` | `comparisons` | HTML reports |
+| `thumbnails.subfolder` | `thumbnails` | Preview JPEGs |
+| `logging.subfolder` | `logs` | Log file |
 
-- `2` Delete Marked  
-  Deletes files marked for deletion in Excel.
+Also at workspace root: `.scan_checkpoint.json`, `records-backup.pkl`.
 
-- `3` Organize  
-  Organizes based on current config and scanned records.
+Photo libraries stay outside workspace: `scan.folder_path`, `organization.output_folder`, `faces.seed_root`.
 
-- `4` Full (1>2>3)  
-  Full flow: scan, optional delete, optional organize.
+## Menu
 
-- `5` Web Dashboard  
-  Launches Streamlit dashboard (if available).
+- **1. Metadata & Excel** — scan metadata, Excel, deletes, refresh Excel, **Update vault paths** (reconcile + dedupe), **Dedupe vault**, **Cleanup untagged folders**.
+- **2. Organize library** — organize from Excel, convert structure, merge same-date folders.
+- **3. Faces** — face index, people sync, seed refresh.
 
-- `6` Comparisons  
-  Generates visual comparison pages from backup records.
+## Run sequence (menu steps)
 
-- `7` Convert Folder Structure  
-  Converts existing organized tree among `flat/year/year-month-date`.
+1. `Generate / Refresh Metadata`  
+   Scans `scan.folder_path` and writes JSON under `{workspace.root}/metadata/`.  
+   When `duplicates.enabled` / `similar_detection.enabled` are on, duplicate and similar flags are computed during this step.
 
-- `8` Merge Same-Date Folders  
-  Detects actual current structure from disk and merges duplicate-date folders.
+2. `Generate Excel from Metadata`  
+   Reads JSON from `{workspace.root}/metadata/`. Use `metadata.load_recursive: true` only if JSON lives in nested subfolders.  
+   If `workflow.reset_dup_sim_for_excel` is `true`, `Duplicate?` / `Similar?` are reset to `No` in the workbook source before generation (use when you want a clean sheet from metadata).
 
-## Folder Naming Rules
+3. `Apply Excel Delete Actions`  
+   Deletes rows marked in Excel (`DELETE?`, `Duplicate?`, `Similar?`) and deletes linked metadata JSON.
 
-### Organized Date Folders
+4. `Organize Images + Metadata`  
+   Organizes files by config. If `metadata.root_folder` is **set** (vault), JSON **stays** in that folder and `file.full_path` / `organized_path` in JSON are updated to the organized image path. If `root_folder` is **empty**, JSON is moved/copied next to the organized media under `.../metadata/`.
 
-- Daily bucket: `yyyy-mm-dd-xxxxpic-[text]`
-- Monthly bucket: `yyyy-mm-00-xxxxpic-[text]`
+5. `Build/Update Face Index`  
+   Builds face embedding DB from library source (`faces.library_source`).
 
-`xxxxpic` is updated from actual file count (including `videos/` child files where applicable).
+6. `People Tag Sync + Untagged Samples`  
+   Applies seed matches into metadata. Unknown persons get IDs; optional samples go to `faces.untagged_root` (see `faces.untagged_max_samples`, `faces.untagged_pick_best_quality`, `faces.untagged_export_mode`). Seed matches use `faces.similarity_threshold` or `faces.similarity_threshold_percent` (0–100, overrides the float).
 
-### Unaligned Folders
+7. `Seed Feedback Refresh`  
+   After you rename unknown person folders and move them into seed root, run again to refresh metadata person labels.
 
-If a folder does not match date/month formats during conversion:
+8. `Refresh Final Excel`  
+   Regenerate final Excel from updated metadata.
 
-- It is **not moved** to a misc bucket.
-- It stays where it is.
-- Name can be normalized with count injection, e.g.:
-  - `2016-singapore` -> `2016-0123pic-singapore`
+9. `Convert Folder Structure`  
+   Re-layout an existing organized tree (e.g. flat → year); uses `ImageOrganizer` with current `organization.folder_structure`.
 
-## Organization Structures
+10. `Merge Same-Date Folders`  
+    Combine duplicate date/month folders under the organized root when configured.
 
-### 1) `flat`
+## Config Checklist (`v5.0/config.yaml`)
 
-```text
-Organized/
-  2024-04-13-0032pic-goa/
-  2024-04-00-0110pic-family/
-```
+Set these before running:
 
-### 2) `year`
-
-```text
-Organized/
-  2024/
-    2024-04-13-0032pic-goa/
-    2024-04-00-0110pic-family/
-```
-
-### 3) `year-month-date`
-
-```text
-Organized/
-  2024/
-    04-Apr/
-      2024-04-13-0032pic-goa/
-      2024-04-00-0110pic-family/
-```
-
-## Screenshot Detection
-
-Screenshots are detected by:
-
-1. Filename keyword match (`screenshot`, `capture`, etc.), then
-2. Optional resolution fallback when EXIF is weak/missing.
-
-`FB_IMG*` files are treated as non-screenshot photos to avoid false positives.
-
-## Config Guide
-
-Use `v4.1/config.yaml`.
-
-Important keys:
-
-- `scan.folder_path`: source folder to scan.
-- `organization.output_folder`: where organized library is created.
-- `organization.folder_structure`: `flat`, `year`, `year-month-date`.
+- `scan.folder_path`: source photo/video folder.
+- `organization.output_folder`: target organized folder.
+- `organization.folder_structure`: `flat` / `year` / `year-month-date`.
 - `organization.operation`: `copy` or `move`.
-- `organization.conflict_resolution`: `rename`, `skip`, `overwrite`.
-- `organization.separate_screenshots`: enable/disable screenshot split.
-- `output.sheets.*`: enable/disable report sheets.
-
-See inline comments in `config.yaml` for full examples.
-
-## Conversion and Merge Workflow
-
-Recommended sequence when changing structure:
-
-1. Run Option `7` to convert structure.
-2. Run Option `8` to merge same-date folders.
-3. Verify count naming (`xxxxpic`) after merges.
-
-Option 8 now uses detected on-disk structure so it works even if config still has older structure value.
-
-If two folders share the same date prefix but have **different** non-empty text suffixes (for example `-singapore` vs `-malaysia`), Option 8 **does not merge** them so trips or locations stay separate.
-
-## Troubleshooting
-
-- Video metadata missing:
-  - Ensure ffprobe is installed and available.
-  - Install MediaInfo runtime for `pymediainfo`.
-  - Confirm video extension is listed in `scan.extensions.videos`.
-
-- Merge not finding folders:
-  - Run Option 8 and confirm detected structure line.
-  - Check folder names begin with expected date format.
-
-- Screenshot misclassification:
-  - Tune `organization.screenshot_keywords`.
-  - Disable `organization.screenshot_detect_by_resolution` if needed.
-
-- Slow scans:
-  - Increase `processing.threads`.
-  - Use `processing.fast_mode` where acceptable.
+- `workspace.root`: **required** absolute path for all tool artifacts.
+- `metadata.subfolder`: vault folder name under workspace (default `metadata`).
+- `metadata.load_recursive`: `true` to load all `*.json` under `root_folder` recursively.
+- `metadata.library_root`: parent folder for partial scans (e.g. `folder1` with `folder2` + `folder3`). When set, JSON stores **`relative_path`** so you can move the tree to another disk by changing only this path.
+- `metadata.store_relative_paths`: `true` (default when `library_root` is set) writes `file.relative_path` in vault JSON.
+- `metadata.reconcile_prefer`: `organized` or `scan` — when both copies exist, reconcile updates to the preferred location.
+- `metadata.auto_reconcile_paths`: `true` = auto-fix vault paths after delete, organize, convert, merge; `false` = off (menu **Update vault full paths** still runs).
+- `metadata.reconcile_remove_missing`: `true` = delete vault JSON when the image file is gone everywhere.
+- `metadata.dedupe_on_reconcile` / `dedupe_before_excel` / `dedupe_after_scan`: remove duplicate JSON for the same file on disk.
+- `workflow.excel_exclude_missing_files`: `true` = Excel only lists rows whose file still exists.
+- `faces.export_untagged`: `false` = person tags only, no `untagged_people` copies.
+- `faces.untagged_skip_duplicates`: skip sample export for non-best duplicate rows.
+- `faces.max_results`: seed match limit (default `50000`).
+- `metadata.update_strategy`: `skip_if_present` / `update_missing` / `refresh` / `full_overwrite`.
+- `workflow.reset_dup_sim_for_excel`: if `true`, step 2 clears duplicate/similar columns before writing Excel.
+- `duplicates.enabled` / `similar_detection.enabled`: control whether step 1 fills those signals.
+- `faces.data_folder`: ensured on disk before face index build; you can point `faces.index_db` under this folder to keep face artifacts in one place.
+- `faces.seed_root`: person seed folders (one person per subfolder).
+- `faces.library_source`: `scan` or `organized` (should match where paths in metadata/index should resolve after organize).
+- `faces.index_db`: SQLite file path for face index.
+- `faces.similarity_threshold`: cosine 0.0–1.0; higher = stricter seed matches (e.g. `0.8`).
+- `faces.similarity_threshold_percent`: optional 0–100; when set, overrides `similarity_threshold`.
+- `faces.untagged_root`: output folder for unknown-person samples.
+- `faces.untagged_max_samples`: max files per unknown id (default `1`).
+- `faces.untagged_pick_best_quality`: when max is 1, replace export if a sharper / higher-quality image is seen later.
+- `faces.untagged_export_mode`: `full` (copy file) or `face_crop` (largest OpenCV face JPEG; falls back to full).
 
 ## Notes
 
-- Keep backups before large move operations.
-- Prefer `operation: copy` for first run validation.
-- Excel and logs provide best traceability for cleanup decisions.
+- `Media ID` is written in metadata/Excel to keep image-metadata linkage stable.
+- **Person columns in Excel** (`Person Match?`, `Person Label`, etc.) are filled when you run step **2** or **8** by reading each file’s metadata JSON `person` object (written in step **6** / refreshed in step **7**). Steps **5** and **6** stay independent: the index (step 5) does not need to be rebuilt when you only regenerate Excel.
+- Re-run step 5 after large organize/move operations if you want face index paths aligned to organized library.
+- Use `organization.operation: copy` for first validation run.
