@@ -19,6 +19,17 @@
 
 ---
 
+## Deep Dive: What happens when you delete photos?
+
+When you use **Task 2 (Delete Marked)**, it is important to understand its limitations:
+
+1.  **Metadata remains**: The tool only deletes the image or video file itself. It does **not** delete the corresponding JSON file in the `metadata/` folder. These files become "orphans"—they stay on your disk but no longer point to an active photo.
+2.  **Folder counts are NOT updated**: If a folder is named `2023-05-01-0010pic-beach` and you delete 5 photos from it, the folder name will **still** say `0010pic`. The tool does not automatically rename folders after a deletion.
+
+**Recommendation**: After a large deletion, if you want your folder counts to be accurate again, you should run **Task 7 (Convert Folder Structure)** followed by **Task 8 (Merge Same-Date Folders)**. This will force the tool to re-scan the folders and update the `xxxxpic` counts in the names.
+
+---
+
 ## Debugging & Technical Risks
 
 During a technical review of the v5.1 codebase, the following risks and "gotchas" were identified:
