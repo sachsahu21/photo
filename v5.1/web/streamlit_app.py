@@ -1,6 +1,11 @@
 """Dashboard v4.1"""
 
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     import streamlit as st
@@ -14,11 +19,22 @@ def main():
     if not ST_OK:
         print('pip install streamlit pandas')
         return
-    st.set_page_config(page_title='Image Scanner v4.1', layout='wide')
-    st.title('Image Scanner v4.1')
-    pkl = Path('records-backup.pkl')
+    from src.config_manager import ConfigManager
+    from src.workspace_paths import records_backup_path
+
+    st.set_page_config(page_title='Image Scanner v5.0', layout='wide')
+    st.title('Image Scanner v5.0')
+    try:
+        config = ConfigManager()
+        if not config.validate():
+            st.error('Invalid config.yaml (workspace.root is required).')
+            return
+        pkl = records_backup_path(config)
+    except Exception as e:
+        st.error(str(e))
+        return
     if not pkl.exists():
-        st.warning('No data. Run main.py first.')
+        st.warning('No data at ' + str(pkl) + '. Run main.py first.')
         return
     import pickle
     with open(pkl, 'rb') as f:
@@ -47,4 +63,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

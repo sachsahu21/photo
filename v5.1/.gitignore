@@ -37,6 +37,13 @@ venv.bak/
 logs/
 *.log
 records_backup.pkl
+records-backup.pkl
+face_index.sqlite
+face_data/
+untagged_people/
+comparisons/
+thumbnails/
+.scan_checkpoint.json
 output/
 *.xlsx
 *.csv

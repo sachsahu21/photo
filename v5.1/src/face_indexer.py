@@ -61,13 +61,36 @@ class FaceIndexer:
         self.seed_root = Path(self.faces_cfg.get("seed_root", "") or "")
         self.target_person = str(self.faces_cfg.get("target_person", "")).strip()
         self.library_source = str(self.faces_cfg.get("library_source", "scan")).lower()
-        self.sim_thr = float(self.faces_cfg.get("similarity_threshold", 0.35))
-        self.max_results = int(self.faces_cfg.get("max_results", 200))
-        self.index_db = Path(self.faces_cfg.get("index_db", "./face_index.sqlite"))
+        self.sim_thr = self._resolve_similarity_threshold(self.faces_cfg)
+        self.max_results = int(self.faces_cfg.get("max_results", 50000))
+        if self.max_results < 0:
+            self.max_results = 0
+        self.index_db = Path(self.faces_cfg.get("index_db") or "")
+        if not str(self.index_db):
+            raise ValueError("faces.index_db not resolved; set workspace.root in config.yaml")
 
         self._torch, self._PILImage, self._MTCNN, self._Resnet = _try_import_facenet()
         self._mtcnn = None
         self._resnet = None
+
+    @staticmethod
+    def _resolve_similarity_threshold(faces_cfg: Dict[str, Any]) -> float:
+        """
+        Cosine similarity in [0, 1]. Higher = stricter (fewer matches).
+        If similarity_threshold_percent is set (0-100), it overrides similarity_threshold.
+        """
+        pct = faces_cfg.get("similarity_threshold_percent")
+        if pct is not None:
+            if not (isinstance(pct, str) and not str(pct).strip()):
+                try:
+                    v = float(pct)
+                    return max(0.0, min(1.0, v / 100.0))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            return max(0.0, min(1.0, float(faces_cfg.get("similarity_threshold", 0.35))))
+        except (TypeError, ValueError):
+            return 0.35
 
     def _require_enabled(self):
         if not self.enabled:
@@ -273,7 +296,9 @@ class FaceIndexer:
                 for p, s in per_file_best.items():
                     merged[(person_label, p)] = s
 
-            ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)[: self.max_results]
+            ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)
+            if self.max_results > 0:
+                ranked = ranked[: self.max_results]
             return [
                 {"person_label": person, "file_path": fp, "similarity": round(sim, 4)}
                 for (person, fp), sim in ranked

@@ -2,6 +2,8 @@ import yaml
 import logging
 from pathlib import Path
 
+from .workspace_paths import apply_workspace_artifacts, resolve_workspace_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,16 +22,28 @@ class ConfigManager:
     def _load(self):
         if not self.config_path.exists():
             self.config = self._defaults()
-            return
+        else:
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    loaded = yaml.safe_load(f)
+                self.config = loaded if isinstance(loaded, dict) else self._defaults()
+            except Exception:
+                self.config = self._defaults()
+        self._apply_workspace_root()
+
+    def _apply_workspace_root(self):
+        """Require workspace.root and resolve all artifact paths under it."""
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                loaded = yaml.safe_load(f)
-            self.config = loaded if isinstance(loaded, dict) else self._defaults()
-        except Exception:
-            self.config = self._defaults()
+            apply_workspace_artifacts(self.config)
+        except ValueError as e:
+            logger.error(str(e))
+
+    def workspace_root(self) -> Path:
+        return resolve_workspace_root(self.config)
 
     def _defaults(self):
         return {
+            'workspace': {'root': ''},
             'scan': {
                 'folder_path': './sample_images',
                 'recursive': True,
@@ -69,6 +83,7 @@ class ConfigManager:
             },
             'organization': {
                 'output_folder': './organized_images',
+                'retire_scan_path_json_on_organize': True,
                 'day_threshold': 60,
                 'use_exif_date': True,
                 'operation': 'copy',
@@ -86,7 +101,7 @@ class ConfigManager:
                 'screenshot_custom_resolutions': [],
             },
             'output': {
-                'output_folder': './reports',
+                'subfolder': 'reports',
                 'filename_prefix': 'image-scan',
                 'sheets': {
                     'all_images': True,
@@ -100,10 +115,43 @@ class ConfigManager:
                 },
             },
             'metadata': {
-                'root_folder': '',
+                'subfolder': 'metadata',
+                'library_root': '',
+                'store_relative_paths': True,
+                'reconcile_prefer': 'organized',
+                'load_recursive': False,
+                'auto_reconcile_paths': True,
+                'reconcile_remove_missing': False,
+                'dedupe_on_reconcile': True,
+                'dedupe_before_excel': True,
+                'dedupe_after_scan': True,
+                'dedupe_prefer': 'organized',
                 'update_strategy': 'update_missing',
                 'schema_version': '1.0',
                 'tool_version': 'v5.1',
+            },
+            'workflow': {
+                'reset_dup_sim_for_excel': False,
+                'excel_exclude_missing_files': False,
+                'excel_include_file_exists_column': True,
+            },
+            'faces': {
+                'enabled': False,
+                'seed_root': './seed',
+                'target_person': '',
+                'library_source': 'scan',
+                'data_subfolder': 'face_data',
+                'index_db_filename': 'face_index.sqlite',
+                'similarity_threshold': 0.8,
+                'similarity_threshold_percent': None,
+                'max_results': 50000,
+                'export_untagged': True,
+                'untagged_skip_duplicates': True,
+                'untagged_cleanup_orphans': True,
+                'untagged_subfolder': 'untagged_people',
+                'untagged_max_samples': 1,
+                'untagged_pick_best_quality': True,
+                'untagged_export_mode': 'full',
             },
             'processing': {
                 'threads': 0,
@@ -114,11 +162,17 @@ class ConfigManager:
                 'fast_mode': False,
                 'skip_video_hash': True,
             },
-            'face_detection': {'enabled': False, 'method': 'opencv'},
+            'face_detection': {
+                'enabled': False,
+                'method': 'opencv',
+                'min_face_size': 24,
+                'min_neighbors': 4,
+                'scale_factor': 1.08,
+            },
             'thumbnails': {
                 'enabled': True,
+                'subfolder': 'thumbnails',
                 'size': [150, 100],
-                'output_folder': './thumbnails',
                 'embed_in_excel': False,
             },
             'clustering': {
@@ -134,13 +188,14 @@ class ConfigManager:
                 'top_k': 5,
                 'confidence_threshold': 0.3,
             },
-            'comparison': {'enabled': True, 'output_folder': './comparisons'},
+            'comparison': {'enabled': True, 'subfolder': 'comparisons', 'generate_after_excel': False},
             'analytics': {'enabled': True},
             'cloud': {'enabled': False, 'provider': 'none'},
             'streamlit': {'enabled': True, 'port': 8501},
             'logging': {
                 'level': 'INFO',
-                'file': './logs/image-scanner.log',
+                'subfolder': 'logs',
+                'log_filename': 'image-scanner.log',
                 'console': True
             },
         }
@@ -169,8 +224,39 @@ class ConfigManager:
     def to_dict(self):
         return self.config.copy()
 
+    def artifact_summary(self):
+        """Resolved artifact paths for display."""
+        return {
+            'workspace': str(self.get('workspace._resolved_root') or self.get('workspace.root', '')),
+            'metadata': self.get('metadata.root_folder', ''),
+            'face_data': self.get('faces.data_folder', ''),
+            'face_index': self.get('faces.index_db', ''),
+            'untagged': self.get('faces.untagged_root', ''),
+            'reports': self.get('output.output_folder', ''),
+            'comparisons': self.get('comparison.output_folder', ''),
+            'thumbnails': self.get('thumbnails.output_folder', ''),
+            'log': self.get('logging.file', ''),
+            'checkpoint': self.get('processing.checkpoint_file', ''),
+            'backup': str(self.workspace_root() / 'records-backup.pkl'),
+        }
+
     def validate(self):
         errors = []
+        ws = str(self.get('workspace.root', '') or '').strip()
+        if not ws:
+            errors.append('workspace.root is required (all tool artifacts live under this folder)')
+        else:
+            try:
+                apply_workspace_artifacts(self.config)
+            except ValueError as e:
+                errors.append(str(e))
+            except OSError as e:
+                errors.append('workspace.root not usable: ' + str(e))
+
+        rf = str(self.get('metadata.root_folder', '') or '').strip()
+        if ws and not rf:
+            errors.append('metadata vault not resolved (check workspace.root)')
+
         sp = self.get('scan.folder_path')
         if not sp:
             errors.append('scan.folder_path required')
@@ -184,9 +270,12 @@ class ConfigManager:
                 ' (use flat, year, or year-month-date)'
             )
 
+        us = str(self.get('metadata.update_strategy', 'update_missing') or '').lower()
+        if us not in ('skip_if_present', 'update_missing', 'refresh', 'full_overwrite'):
+            errors.append('Invalid metadata.update_strategy: ' + us)
+
         if errors:
             print('\n  Config issues:')
             for e in errors:
                 print('    - ' + e)
         return len(errors) == 0
-

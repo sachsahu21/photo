@@ -22,10 +22,10 @@ for v4.1
 py install 3.11
 py -3.11 -m venv .venv311
 .venv311\Scripts\activate
+ cd .\v5.0\
 python main.py
 python -m pip install --upgrade pip setuptools wheel
 pip install -r v4.1/requirements.txt
-
 
 --- 
 
@@ -37,6 +37,8 @@ opus-streamlit_v2 - lighter version and fast ( advanced takes more time )
 opus-streamlit_v3 - folder format with pic number, screenshot and WA images
 opus-streamlit_v4 - folders in 000 format and updated count, similar pics screenshot and WA images
 v4.0 cursor
+v5.0 - with face detection and clear to ptions
+v5.1 - Jules
 
 
 

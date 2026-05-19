@@ -8,17 +8,19 @@ logger = logging.getLogger(__name__)
 
 
 class CheckpointManager:
-    def __init__(self, interval=100):
+    def __init__(self, interval=100, file_path=None):
+        if not file_path:
+            raise ValueError('checkpoint file_path required (set workspace.root in config.yaml)')
         self.interval = interval
         self.processed = set()
         self.count = 0
-        self._file = '.scan_checkpoint.json'
+        self._file = str(file_path)
 
     def load(self):
         try:
             p = Path(self._file)
             if p.exists():
-                with open(p, 'r') as f:
+                with open(p, 'r', encoding='utf-8') as f:
                     self.processed = set(json.load(f).get('processed', []))
                 return True
         except Exception:
@@ -27,7 +29,9 @@ class CheckpointManager:
 
     def save(self):
         try:
-            with open(self._file, 'w') as f:
+            p = Path(self._file)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
                 json.dump({'processed': list(self.processed)}, f)
         except Exception:
             pass

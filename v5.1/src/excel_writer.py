@@ -20,12 +20,14 @@ logger = logging.getLogger(__name__)
 class ExcelWriter:
 
     ALL_COLS = [
+        ('media_id', 'Media ID', 36),
         ('filename', 'Filename', 30),
         ('folder', 'Folder', 50),
         ('extension', 'Format', 10),
         ('file_type', 'Type', 8),
         ('size_mb', 'Size (MB)', 12),
         ('metadata_status', 'Metadata Status', 18),
+        ('file_exists', 'File Exists?', 10),
         ('is_duplicate', 'Duplicate?', 12),
         ('duplicate_group', 'Dup Group', 12),
         ('is_best_in_group', 'Best?', 8),
@@ -85,10 +87,12 @@ class ExcelWriter:
         ('md5_hash', 'MD5 Hash', 36),
         ('file_modified', 'File Modified', 20),
         ('full_path', 'Full Path', 60),
+        ('relative_path', 'Relative Path', 45),
         ('error', 'Read Error', 30),
     ]
 
     DUP_COLS = [
+        ('media_id', 'Media ID', 36),
         ('duplicate_group', 'Group', 12),
         ('is_best_in_group', 'Best?', 8),
         ('recommendation', 'Recommendation', 20),
@@ -110,6 +114,7 @@ class ExcelWriter:
         ('delete_flag', 'DELETE? (Yes/No)', 16),
         ('md5_hash', 'MD5 Hash', 36),
         ('full_path', 'Full Path', 60),
+        ('relative_path', 'Relative Path', 45),
     ]
 
     BLUR_COLS = [
@@ -146,7 +151,10 @@ class ExcelWriter:
 
     def __init__(self, config):
         out = config.get('output', {})
-        self.output_folder = Path(out.get('output_folder', './reports'))
+        out_path = out.get('output_folder')
+        if not out_path:
+            raise ValueError('output.output_folder not resolved; set workspace.root in config.yaml')
+        self.output_folder = Path(out_path)
         self.output_folder.mkdir(parents=True, exist_ok=True)
         self.prefix = out.get('filename_prefix', 'image-scan')
         sh = out.get('sheets', {})
@@ -162,6 +170,13 @@ class ExcelWriter:
     def write(self, records, scan_folder, analytics_data=None):
         if not XLSX_OK:
             return self._csv_fb(records) or ''
+
+        wf = self.config.get('workflow', {})
+        if wf.get('excel_exclude_missing_files'):
+            records = [
+                r for r in records
+                if str(r.get('file_exists', 'Yes')).lower() == 'yes'
+            ]
 
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         parent_name = Path(scan_folder).name

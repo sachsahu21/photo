@@ -9,6 +9,8 @@ from datetime import datetime
 from collections import defaultdict, Counter
 
 from tqdm import tqdm
+from .metadata_paths import apply_media_path_to_doc
+from .metadata_store import _ensure_json_serializable
 from .utils import (
     parse_datetime_flexible, resolve_filename_conflict,
     ensure_directory, safe_filename, is_valid_date_folder,
@@ -156,6 +158,7 @@ def _normalize_unaligned_folder_name(folder_path):
 class ImageOrganizer:
 
     def __init__(self, config):
+        self.config = config or {}
         org = config.get('organization', {})
         self.output = Path(org.get('output_folder', './organized_images'))
         self.day_thr = int(org.get('day_threshold', 60))
@@ -174,6 +177,11 @@ class ImageOrganizer:
         self.screen_res = _build_screen_res(custom_res)
         ensure_directory(self.output)
         self._cache = None
+        meta_cfg = config.get("metadata") or {}
+        rf = str(meta_cfg.get("root_folder", "") or "").strip()
+        self._metadata_vault_root = (
+            Path(rf).expanduser().resolve() if rf else None
+        )
 
     def _is_ss(self, rec):
         if not self.sep_ss:
@@ -509,25 +517,61 @@ class ImageOrganizer:
             if not src_meta.exists():
                 return
             media_dest = Path(media_dest)
-            folder_root = media_dest.parent.parent if media_dest.parent.name == 'videos' else media_dest.parent
-            meta_dir = folder_root / 'metadata'
+
+            vault_in_place = False
+            if self._metadata_vault_root is not None:
+                try:
+                    src_meta.resolve().relative_to(self._metadata_vault_root.resolve())
+                    vault_in_place = True
+                except ValueError:
+                    pass
+                except OSError:
+                    pass
+
+            if vault_in_place:
+                meta_dest = src_meta.resolve()
+                try:
+                    data = json.loads(meta_dest.read_text(encoding="utf-8"))
+                    apply_media_path_to_doc(data, media_dest, self.config, meta_dest)
+                    data = _ensure_json_serializable(data)
+                    meta_dest.write_text(
+                        json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8"
+                    )
+                    try:
+                        from .vault_maintenance import retire_scan_json_for_organized_file
+
+                        md5 = str(rec.get("md5_hash") or rec.get("MD5 Hash") or "")
+                        retire_scan_json_for_organized_file(
+                            self.config, media_dest, meta_dest, md5_hash=md5
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                return
+
+            folder_root = (
+                media_dest.parent.parent
+                if media_dest.parent.name == "videos"
+                else media_dest.parent
+            )
+            meta_dir = folder_root / "metadata"
             ensure_directory(meta_dir)
             meta_dest = resolve_filename_conflict(meta_dir / src_meta.name, self.conflict)
             if meta_dest is None:
                 return
-            if self.op == 'move':
+            if self.op == "move":
                 shutil.move(str(src_meta), str(meta_dest))
             else:
                 shutil.copy2(str(src_meta), str(meta_dest))
 
             try:
-                data = json.loads(meta_dest.read_text(encoding='utf-8'))
-                file_info = data.get('file', {}) if isinstance(data, dict) else {}
-                if isinstance(file_info, dict):
-                    file_info['organized_path'] = str(media_dest)
-                    data['file'] = file_info
-                data['metadata_path'] = str(meta_dest)
-                meta_dest.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding='utf-8')
+                data = json.loads(meta_dest.read_text(encoding="utf-8"))
+                apply_media_path_to_doc(data, media_dest, self.config, meta_dest)
+                data = _ensure_json_serializable(data)
+                meta_dest.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8"
+                )
             except Exception:
                 pass
         except Exception:
