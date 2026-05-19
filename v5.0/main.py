@@ -14,6 +14,14 @@ from src.face_indexer import FaceIndexer
 from src.metadata_store import MetadataStore
 from src.people_sync import sync_people_tags
 from src.metadata_reconcile import reconcile_vault_paths, auto_reconcile_if_enabled
+from src.vault_maintenance import (
+    dedupe_vault,
+    delete_media_cascade,
+    cleanup_untagged_orphans,
+    save_last_excel_path,
+    load_last_excel_path,
+    rebuild_vault_index,
+)
 
 
 from src.workspace_paths import records_backup_path
@@ -107,6 +115,9 @@ def task_1(config, logger):
                 r['similar_methods'] = ''
         md_store = MetadataStore(config.to_dict())
         records = md_store.upsert_records(records)
+        if config.get('metadata.dedupe_after_scan', True):
+            dedupe_vault(config.to_dict(), quiet=True)
+            records = MetadataStore(config.to_dict()).load_records()
         print('  Metadata JSON: ' + str(len(records)) + ' records')
         save_bk(records, config)
         return str(md_store.root)
@@ -120,11 +131,17 @@ def task_1(config, logger):
 
 def task_1b(config, logger):
     print('\n  STEP 2: GENERATE EXCEL FROM METADATA')
-    records = MetadataStore(config.to_dict()).load_records()
+    cfg = config.to_dict()
+    if config.get('metadata.dedupe_before_excel', True):
+        dedupe_vault(cfg, quiet=True)
+    records = MetadataStore(cfg).load_records()
     if not records:
         records = load_bk(config)
     if not records:
         return None
+    missing = sum(1 for r in records if str(r.get('file_exists', '')).lower() != 'yes')
+    if missing:
+        print('  Note: ' + str(missing) + ' vault row(s) have no file on disk (see File Exists? column)')
     if config.get('workflow.reset_dup_sim_for_excel', False):
         for r in records:
             r['is_duplicate'] = 'No'
@@ -138,10 +155,21 @@ def task_1b(config, logger):
         ad = StorageAnalytics().analyze(records)
     except Exception:
         pass
-    ep = ExcelWriter(config.to_dict()).write(
+    ep = ExcelWriter(cfg).write(
         records, config.get('scan.folder_path'), analytics_data=ad
     )
-    print('  Excel: ' + str(ep))
+    if ep:
+        save_last_excel_path(config, ep)
+        print('  Excel: ' + str(ep))
+        if config.get('comparison.generate_after_excel', False):
+            try:
+                from src.comparison_generator import ComparisonGenerator
+                out = config.get('comparison.output_folder')
+                if out:
+                    ComparisonGenerator(out).generate(records)
+                    print('  Comparisons: ' + str(out))
+            except Exception as e:
+                print('  Comparison skipped: ' + str(e))
     return ep
 
 
@@ -149,9 +177,29 @@ def task_reconcile_paths(config, logger):
     print('\n  UPDATE VAULT FULL PATHS (fast reconcile)')
     print('  ' + '=' * 50)
     try:
-        reconcile_vault_paths(config.to_dict())
+        stats = reconcile_vault_paths(config.to_dict())
+        if stats.get('dedupe_removed'):
+            print('  Dedupe removed: ' + str(stats['dedupe_removed']) + ' duplicate json')
     except Exception as e:
         logger.error('Reconcile: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
+def task_dedupe_vault(config, logger):
+    print('\n  DEDUPE METADATA VAULT (same file on disk)')
+    print('  ' + '=' * 50)
+    try:
+        dedupe_vault(config.to_dict())
+    except Exception as e:
+        print('  Error: ' + str(e))
+
+
+def task_cleanup_untagged(config, logger):
+    print('\n  CLEANUP UNTAGGED SAMPLE FOLDERS')
+    print('  ' + '=' * 50)
+    try:
+        cleanup_untagged_orphans(config.to_dict())
+    except Exception as e:
         print('  Error: ' + str(e))
 
 
@@ -173,6 +221,7 @@ def task_2(ep, config, logger):
             sci = None
             dupi = None
             mci = hdr.get('metadata json path')
+            midci = hdr.get('media id')
             for h, ci in hdr.items():
                 if 'delete' in h:
                     dci = ci
@@ -194,42 +243,37 @@ def task_2(ep, config, logger):
                 if not delete_me:
                     continue
                 mp = ws.cell(row=ri, column=mci).value if mci else ''
-                targets.append((str(fp), str(mp or '').strip()))
+                mid = ws.cell(row=ri, column=midci).value if midci else ''
+                targets.append({
+                    'full_path': str(fp),
+                    'metadata_json_path': str(mp or '').strip(),
+                    'media_id': str(mid or '').strip(),
+                })
 
         if not targets:
             print('  Nothing to delete')
             return
-        # dedupe by full path to avoid multi-sheet double delete
         uniq = {}
-        for fp, mp in targets:
-            uniq[fp] = mp
+        for t in targets:
+            uniq[t['full_path']] = t
         print('  ' + str(len(uniq)) + ' files marked')
         if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
             return
-        ok = er = nf = m_ok = m_nf = 0
-        for fp, mp in uniq.items():
-            try:
-                p = Path(fp)
-                if p.exists():
-                    p.unlink()
-                    ok += 1
-                else:
-                    nf += 1
-            except Exception:
-                er += 1
-            if mp:
-                try:
-                    mp_path = Path(mp)
-                    if mp_path.exists():
-                        mp_path.unlink()
-                        m_ok += 1
-                    else:
-                        m_nf += 1
-                except Exception:
-                    pass
-        print('  Images Deleted: ' + str(ok) + ' | Missing: ' + str(nf) + ' | Errors: ' + str(er))
-        print('  Metadata Deleted: ' + str(m_ok) + ' | Missing: ' + str(m_nf))
+        stats = delete_media_cascade(config.to_dict(), list(uniq.values()), delete_files=True)
+        print(
+            '  Images deleted: ' + str(stats['files_deleted'])
+            + ' | missing: ' + str(stats['files_missing'])
+        )
+        print(
+            '  Metadata deleted: ' + str(stats['json_deleted'])
+            + ' | untagged dirs: ' + str(stats['untagged_removed'])
+            + ' | face index rows: ' + str(stats['face_rows_removed'])
+        )
+        dedupe_vault(config.to_dict(), quiet=True)
         auto_reconcile_if_enabled(config.to_dict(), 'after delete')
+        records = MetadataStore(config.to_dict()).load_records()
+        if records:
+            save_bk(records, config)
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -276,6 +320,10 @@ def task_3(ep, config, logger):
         e = sum(1 for m in mvs if 'Error' in m['status'])
         print('  Done: ' + str(s) + ' success, ' + str(e) + ' errors')
         auto_reconcile_if_enabled(config.to_dict(), 'after organize')
+        dedupe_vault(config.to_dict(), quiet=True)
+        records = MetadataStore(config.to_dict()).load_records()
+        if records:
+            save_bk(records, config)
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -318,15 +366,19 @@ def task_6(config, logger):
         pick_q = config.get('faces.untagged_pick_best_quality', True)
         if isinstance(pick_q, str):
             pick_q = pick_q.strip().lower() in ('1', 'true', 'yes', 'on')
+        export_ut = config.get('faces.export_untagged', True)
+        if isinstance(export_ut, str):
+            export_ut = export_ut.strip().lower() in ('1', 'true', 'yes', 'on')
         known, unknown = sync_people_tags(
             records,
             matches,
             untagged_root,
-            export_untagged=True,
+            export_untagged=bool(export_ut),
             seed_only_refresh=False,
             untagged_max_samples=ums,
             untagged_pick_best_quality=bool(pick_q),
             untagged_export_mode=str(config.get('faces.untagged_export_mode', 'full') or 'full'),
+            config=config.to_dict(),
         )
         save_bk(records, config)
         print(f'  Known tagged: {known} | Unknown tagged: {unknown}')
@@ -352,7 +404,8 @@ def task_7(config, logger):
         matches = fi.find_person()
         untagged_root = Path(config.get('faces.untagged_root'))
         known, unknown = sync_people_tags(
-            records, matches, untagged_root, export_untagged=False, seed_only_refresh=True
+            records, matches, untagged_root, export_untagged=False, seed_only_refresh=True,
+            config=config.to_dict(),
         )
         save_bk(records, config)
         print(f'  Known re-tagged: {known}')
@@ -438,7 +491,9 @@ def menu_metadata(config, logger, last_excel):
         print('  2.  Generate Excel from Metadata')
         print('  3.  Apply Excel Delete Actions')
         print('  4.  Refresh Final Excel')
-        print('  5.  Update vault full paths  (always runs; ignores auto setting)')
+        print('  5.  Update vault full paths  (reconcile + dedupe)')
+        print('  6.  Dedupe metadata vault only')
+        print('  7.  Cleanup untagged sample folders')
         print('  0.  Back')
         ch = input('  Choice: ').strip().lower()
         if ch == '0':
@@ -448,7 +503,7 @@ def menu_metadata(config, logger, last_excel):
         elif ch == '2':
             last_excel = task_1b(config, logger) or last_excel
         elif ch == '3':
-            p = input('  Excel (Enter=last): ').strip() or last_excel
+            p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
             if p and Path(p).exists():
                 task_2(p, config, logger)
             else:
@@ -457,6 +512,10 @@ def menu_metadata(config, logger, last_excel):
             last_excel = task_8(config, logger) or last_excel
         elif ch == '5':
             task_reconcile_paths(config, logger)
+        elif ch == '6':
+            task_dedupe_vault(config, logger)
+        elif ch == '7':
+            task_cleanup_untagged(config, logger)
         else:
             print('  Invalid')
         input('\n  Enter to continue...')
@@ -475,7 +534,7 @@ def menu_organize(config, logger, last_excel):
         if ch == '0':
             return
         if ch == '1':
-            p = input('  Excel (Enter=last): ').strip() or last_excel
+            p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
             if p and Path(p).exists():
                 task_3(p, config, logger)
             else:
@@ -540,7 +599,7 @@ def main():
                 ft.append(n)
         if ft:
             print('  Features: ' + ', '.join(ft))
-        last_excel = None
+        last_excel = load_last_excel_path(config)
         while True:
             print('')
             print(_vault_line(config))

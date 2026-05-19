@@ -6,7 +6,7 @@ import json
 import hashlib
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .metadata_paths import apply_media_path_to_doc, resolve_absolute_from_doc
 
@@ -251,7 +251,37 @@ class MetadataStore:
             "schema_version": doc.get("schema_version", self.schema_version),
         })
         self._apply_person_from_doc(rec, doc)
+        fp = str(rec.get("full_path") or "").strip()
+        rec["file_exists"] = "Yes" if fp and Path(fp).is_file() else "No"
         return rec
+
+    def rebuild_index(self) -> int:
+        from .vault_maintenance import rebuild_vault_index
+        return rebuild_vault_index(self.config)
+
+    def load_records(
+        self,
+        *,
+        exclude_missing: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        if exclude_missing is None:
+            exclude_missing = bool(
+                (self.config.get("workflow") or {}).get("excel_exclude_missing_files", False)
+            )
+        if not self.root.exists():
+            return []
+        from .vault_maintenance import iter_vault_json_paths
+
+        records = []
+        for jp in iter_vault_json_paths(self):
+            try:
+                doc = json.loads(jp.read_text(encoding="utf-8"))
+                records.append(self._doc_to_record(doc, jp))
+            except Exception:
+                continue
+        if exclude_missing:
+            records = [r for r in records if str(r.get("file_exists", "")).lower() == "yes"]
+        return records
 
     def upsert_records(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out = []
@@ -295,24 +325,3 @@ class MetadataStore:
 
         self.index_path.write_text(json.dumps(index, indent=2, ensure_ascii=True), encoding="utf-8")
         return out
-
-    def load_records(self) -> List[Dict[str, Any]]:
-        if not self.root.exists():
-            return []
-        records = []
-        if self.load_recursive:
-            json_paths = sorted(
-                (p for p in self.root.rglob("*.json") if p.name != self.index_path.name),
-                key=lambda p: str(p),
-            )
-        else:
-            json_paths = sorted(self.root.glob("*.json"))
-        for jp in json_paths:
-            if jp.name == self.index_path.name:
-                continue
-            try:
-                doc = json.loads(jp.read_text(encoding="utf-8"))
-                records.append(self._doc_to_record(doc, jp))
-            except Exception:
-                continue
-        return records

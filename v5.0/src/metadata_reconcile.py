@@ -241,6 +241,14 @@ def reconcile_vault_paths(
         if stats["removed"]:
             msg += ", " + str(stats["removed"]) + " json removed"
         print(msg)
+
+    from .vault_maintenance import dedupe_vault, rebuild_vault_index
+
+    if bool(meta_cfg.get("dedupe_on_reconcile", True)):
+        dedupe_stats = dedupe_vault(config, quiet=quiet)
+        stats["dedupe_removed"] = dedupe_stats.get("removed", 0)
+    else:
+        rebuild_vault_index(config)
     return stats
 
 

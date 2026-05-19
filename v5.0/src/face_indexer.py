@@ -62,7 +62,9 @@ class FaceIndexer:
         self.target_person = str(self.faces_cfg.get("target_person", "")).strip()
         self.library_source = str(self.faces_cfg.get("library_source", "scan")).lower()
         self.sim_thr = self._resolve_similarity_threshold(self.faces_cfg)
-        self.max_results = int(self.faces_cfg.get("max_results", 200))
+        self.max_results = int(self.faces_cfg.get("max_results", 50000))
+        if self.max_results < 0:
+            self.max_results = 0
         self.index_db = Path(self.faces_cfg.get("index_db") or "")
         if not str(self.index_db):
             raise ValueError("faces.index_db not resolved; set workspace.root in config.yaml")
@@ -294,7 +296,9 @@ class FaceIndexer:
                 for p, s in per_file_best.items():
                     merged[(person_label, p)] = s
 
-            ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)[: self.max_results]
+            ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)
+            if self.max_results > 0:
+                ranked = ranked[: self.max_results]
             return [
                 {"person_label": person, "file_path": fp, "similarity": round(sim, 4)}
                 for (person, fp), sim in ranked

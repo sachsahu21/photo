@@ -46,7 +46,7 @@ Photo libraries stay outside workspace: `scan.folder_path`, `organization.output
 
 ## Menu
 
-- **1. Metadata & Excel** — scan metadata, Excel, deletes, refresh Excel, **Update vault full paths** (fast reconcile; always available).
+- **1. Metadata & Excel** — scan metadata, Excel, deletes, refresh Excel, **Update vault paths** (reconcile + dedupe), **Dedupe vault**, **Cleanup untagged folders**.
 - **2. Organize library** — organize from Excel, convert structure, merge same-date folders.
 - **3. Faces** — face index, people sync, seed refresh.
 
@@ -100,6 +100,11 @@ Set these before running:
 - `metadata.reconcile_prefer`: `organized` or `scan` — when both copies exist, reconcile updates to the preferred location.
 - `metadata.auto_reconcile_paths`: `true` = auto-fix vault paths after delete, organize, convert, merge; `false` = off (menu **Update vault full paths** still runs).
 - `metadata.reconcile_remove_missing`: `true` = delete vault JSON when the image file is gone everywhere.
+- `metadata.dedupe_on_reconcile` / `dedupe_before_excel` / `dedupe_after_scan`: remove duplicate JSON for the same file on disk.
+- `workflow.excel_exclude_missing_files`: `true` = Excel only lists rows whose file still exists.
+- `faces.export_untagged`: `false` = person tags only, no `untagged_people` copies.
+- `faces.untagged_skip_duplicates`: skip sample export for non-best duplicate rows.
+- `faces.max_results`: seed match limit (default `50000`).
 - `metadata.update_strategy`: `skip_if_present` / `update_missing` / `refresh` / `full_overwrite`.
 - `workflow.reset_dup_sim_for_excel`: if `true`, step 2 clears duplicate/similar columns before writing Excel.
 - `duplicates.enabled` / `similar_detection.enabled`: control whether step 1 fills those signals.

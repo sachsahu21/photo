@@ -78,8 +78,9 @@ organization:
   folder_structure: "flat"
   # copy = keep originals; move = relocate into organized tree
   operation: "copy"
+  retire_scan_path_json_on_organize: true
   # rename | skip | overwrite when filename exists
-  conflict_resolution: "rename"
+  conflict_resolution: "overwrite"
   # >= day_threshold files on one day → daily folder; else monthly folder
   day_threshold: 60
   use_exif_date: true
@@ -114,7 +115,11 @@ metadata:
   # true = auto-fix vault paths after delete/organize/convert/merge
   auto_reconcile_paths: true
   # true = delete vault JSON when image missing everywhere (use with care)
-  reconcile_remove_missing: false
+  reconcile_remove_missing: true
+  dedupe_on_reconcile: true
+  dedupe_before_excel: true
+  dedupe_after_scan: true
+  dedupe_prefer: organized
   # skip_if_present | update_missing | refresh | full_overwrite
   update_strategy: "update_missing"
   schema_version: "1.0"
@@ -133,6 +138,9 @@ faces:
   similarity_threshold: 0.35
   similarity_threshold_percent: null
   max_results: 200
+  export_untagged: true
+  untagged_skip_duplicates: true
+  untagged_cleanup_orphans: true
   untagged_max_samples: 1
   untagged_pick_best_quality: true
   untagged_export_mode: "full"
@@ -149,10 +157,6 @@ output:
     quality_report: true
     analytics: true
     clusters: true
-
-comparison:
-  enabled: true
-  subfolder: comparisons
 
 thumbnails:
   enabled: false
@@ -216,6 +220,13 @@ face_detection:
 
 workflow:
   reset_dup_sim_for_excel: false
+  excel_exclude_missing_files: false
+  excel_include_file_exists_column: true
+
+comparison:
+  enabled: true
+  subfolder: comparisons
+  generate_after_excel: false
 
 clustering:
   enabled: false

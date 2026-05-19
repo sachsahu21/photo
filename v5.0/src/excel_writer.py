@@ -27,6 +27,7 @@ class ExcelWriter:
         ('file_type', 'Type', 8),
         ('size_mb', 'Size (MB)', 12),
         ('metadata_status', 'Metadata Status', 18),
+        ('file_exists', 'File Exists?', 10),
         ('is_duplicate', 'Duplicate?', 12),
         ('duplicate_group', 'Dup Group', 12),
         ('is_best_in_group', 'Best?', 8),
@@ -169,6 +170,13 @@ class ExcelWriter:
     def write(self, records, scan_folder, analytics_data=None):
         if not XLSX_OK:
             return self._csv_fb(records) or ''
+
+        wf = self.config.get('workflow', {})
+        if wf.get('excel_exclude_missing_files'):
+            records = [
+                r for r in records
+                if str(r.get('file_exists', 'Yes')).lower() == 'yes'
+            ]
 
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         parent_name = Path(scan_folder).name

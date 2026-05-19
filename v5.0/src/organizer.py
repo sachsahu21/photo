@@ -537,6 +537,15 @@ class ImageOrganizer:
                     meta_dest.write_text(
                         json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8"
                     )
+                    try:
+                        from .vault_maintenance import retire_scan_json_for_organized_file
+
+                        md5 = str(rec.get("md5_hash") or rec.get("MD5 Hash") or "")
+                        retire_scan_json_for_organized_file(
+                            self.config, media_dest, meta_dest, md5_hash=md5
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 return

@@ -261,6 +261,16 @@ def _maybe_export_untagged_sample(
     )
 
 
+def _should_skip_untagged_export(rec: Dict[str, Any], config: Dict[str, Any]) -> bool:
+    faces = config.get("faces") or {}
+    if not faces.get("untagged_skip_duplicates", True):
+        return False
+    if str(rec.get("is_duplicate", "")).upper() != "YES":
+        return False
+    best = str(rec.get("is_best_in_group", "")).strip().lower()
+    return best not in ("yes", "y", "1", "true")
+
+
 def sync_people_tags(
     records: List[Dict[str, Any]],
     matches: List[Dict[str, Any]],
@@ -271,6 +281,7 @@ def sync_people_tags(
     untagged_max_samples: int = 1,
     untagged_pick_best_quality: bool = True,
     untagged_export_mode: str = "full",
+    config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[int, int]:
     """
     Update metadata JSON with seed person matches.
@@ -284,6 +295,7 @@ def sync_people_tags(
     untagged_export_mode: "full" copies the file; "face_crop" writes largest Haar face JPEG
         (falls back to full if no face or OpenCV missing).
     """
+    config = config or {}
     best_by_alias = _build_match_index(matches)
     if export_untagged:
         untagged_root.mkdir(parents=True, exist_ok=True)
@@ -330,7 +342,7 @@ def sync_people_tags(
                 doc["person"] = person_info
                 unknown_updates += 1
 
-                if export_untagged:
+                if export_untagged and not _should_skip_untagged_export(rec, config):
                     src = Path(fp)
                     if src.exists():
                         dest_dir = untagged_root / unk_id
@@ -356,6 +368,15 @@ def sync_people_tags(
 
         try:
             jp.write_text(json.dumps(doc, indent=2, ensure_ascii=True), encoding="utf-8")
+        except Exception:
+            pass
+
+    faces_cfg = config.get("faces") or {}
+    if faces_cfg.get("untagged_cleanup_orphans", True) and export_untagged:
+        try:
+            from .vault_maintenance import cleanup_untagged_orphans
+
+            cleanup_untagged_orphans(config, quiet=True)
         except Exception:
             pass
 
