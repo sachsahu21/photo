@@ -1,32 +1,55 @@
 # Image Scanner v5.1 Technical Analysis & Guide
 
-## Detailed Menu Breakdown (main.py)
+## Redesigned Menu Breakdown (main.py)
 
-| Option | Task Name | Description |
-| :--- | :--- | :--- |
-| **1** | **Scan & Extract** | Performs a full scan of the source folder. Computes hashes, detects duplicates/similar images, runs blur detection, and extracts metadata into the Metadata Store and an Excel report. |
-| **1b** | **Resume Excel** | Reloads records from the Metadata Store or backup file to regenerate the Excel report without re-scanning the files. |
-| **2** | **Delete Marked** | Reads the Excel report and physically deletes files that have a 'Yes' or 'True' in the `DELETE?` column. |
-| **3** | **Organize** | Moves or copies files into the structured library (e.g., date-based folders) based on the scan records and configuration. |
-| **4** | **Full (1>2>3)** | A shortcut that runs the Scan, then asks to Delete, then asks to Organize in one sequence. |
-| **5** | **Web Dashboard** | Launches an external Streamlit application for a visual, browser-based view of the scan results. |
-| **6** | **Comparisons** | Generates HTML pages allowing side-by-side visual comparison of duplicate and similar image groups. |
-| **7** | **Convert Structure**| Refactors an *already organized* library between hierarchies (Flat vs. Year vs. Year-Month-Date). |
-| **8** | **Merge Folders** | Detects folders from the same date (e.g., from different scan batches) and merges them into a single folder. |
-| **9** | **Face Index** | Scans the library to create AI embeddings for every face found, storing them in a SQLite database. |
-| **10** | **Find Person** | Uses "Seed Photos" to find and tag a specific person across the entire library using the Face Index. |
-| **0** | **Exit** | Safely closes the application. |
+The menu has been reorganized into logical functional blocks for better usability.
+
+### Category: CORE WORKFLOW
+| Option | Task Name | Description | What's Missing / Can be Added |
+| :--- | :--- | :--- | :--- |
+| **1** | **Full Automatic Flow** | Sequence: Scan -> Delete Marked -> Organize. Ideal for one-click processing. | Missing a "Dry Run" mode to see what would happen before any files are moved or deleted. |
+| **2** | **Scan & Extract** | Pure scanning phase. Computes hashes, detects duplicates/blur, and builds the initial Metadata Store. | Could add "Delta Scanning" to only scan files changed since the last run. |
+| **3** | **Resume / Regenerate** | Rebuilds the Excel report using existing sidecar JSON files without touching the original media. | Needs an option to "Sync Metadata" (backfill missing tags into JSONs from existing Excel edits). |
+| **4** | **Execute Deletions** | Deletes files marked 'Yes' in the Excel report. | **Safety Gap**: Should move files to a `.trash` folder instead of permanent `unlink`. |
+| **5** | **Organize Files** | The filing engine. Groups photos into date-based folders according to configuration. | Needs an "Undo" feature to reverse the last organization operation. |
+
+### Category: AI & VISUAL TOOLS
+| Option | Task Name | Description | What's Missing / Can be Added |
+| :--- | :--- | :--- | :--- |
+| **6** | **Face Discovery Suite** | Submenu for Building Face Index (embeddings) and Finding People (seed search). | Interactive "Face Review": Show a cluster of unknown faces and let the user tag them in-app. |
+| **7** | **Visual Comparisons** | Generates side-by-side HTML comparison pages for duplicate/similar groups. | Currently static; could be an interactive web view where you can click "Keep This" or "Delete That". |
+| **8** | **Web Dashboard** | Launches the Streamlit dashboard for a visual overview of the library. | Integration: Let the user perform actions (like tagging) directly from the dashboard. |
+
+### Category: MAINTENANCE
+| Option | Task Name | Description | What's Missing / Can be Added |
+| :--- | :--- | :--- | :--- |
+| **9** | **Convert Structure** | Migrates organized library between Flat, Year, and Month hierarchies. | Path Safety: Should verify destination disk space before starting large moves. |
+| **10** | **Merge Same-Date** | Consolidates multiple folders from the same date into one. | Smarter Merging: Merge even if folder names have slight suffix differences (with user approval). |
+
+---
+
+## Deep Dive: Face Data vs. Untagged People
+
+A common point of confusion is the difference between these two:
+
+*   **Face Data**: This is "raw" detection. During a scan, the tool identifies *how many* faces are in a photo and categorizes it (e.g., "Portrait" if 1 face, "Group" if 5 faces). It doesn't know *who* the people are.
+*   **Untagged People**: These are detected faces that haven't been matched to a specific identity yet.
+
+**How to resolve same people in multiple folders?**
+If the same person appears across many folders, you can resolve this using **Option 6 -> Find Person**. By providing "seed photos" (photos you know are of that person), the tool will search the entire library—regardless of which folder the files are in—and link them to a single name (label) in your Excel report and Metadata Store.
+
+*Note: This resolves their identity in the records, but it does not physically move all their photos into one folder.*
 
 ---
 
 ## Deep Dive: What happens when you delete photos?
 
-When you use **Task 2 (Delete Marked)**, it is important to understand its limitations:
+When you use **Option 4 (Execute Deletions)**, it is important to understand its limitations:
 
 1.  **Metadata remains**: The tool only deletes the image or video file itself. It does **not** delete the corresponding JSON file in the `metadata/` folder. These files become "orphans"—they stay on your disk but no longer point to an active photo.
 2.  **Folder counts are NOT updated**: If a folder is named `2023-05-01-0010pic-beach` and you delete 5 photos from it, the folder name will **still** say `0010pic`. The tool does not automatically rename folders after a deletion.
 
-**Recommendation**: After a large deletion, if you want your folder counts to be accurate again, you should run **Task 7 (Convert Folder Structure)** followed by **Task 8 (Merge Same-Date Folders)**. This will force the tool to re-scan the folders and update the `xxxxpic` counts in the names.
+**Recommendation**: After a large deletion, if you want your folder counts to be accurate again, you should run **Option 9 (Convert)** followed by **Option 10 (Merge)**. This will force the tool to re-scan the folders and update the `xxxxpic` counts in the names.
 
 ---
 
@@ -36,20 +59,18 @@ During a technical review of the v5.1 codebase, the following risks and "gotchas
 
 1.  **Metadata Path Sensitivity**: The system uses a SHA1 hash of the **absolute file path** as the key for its metadata JSON files.
     *   *Risk*: If you move a file manually (e.g., via Windows Explorer), the path changes, and the tool can no longer find the existing metadata. A re-scan will treat it as a brand new file with no tags or scores.
-2.  **Excel-Dependent Deletion**: Task 2 relies entirely on the text values in the Excel file.
+2.  **Excel-Dependent Deletion**: Option 4 relies entirely on the text values in the Excel file.
     *   *Risk*: If you accidentally drag-and-drop or use "Fill Down" in Excel on the `DELETE?` column, you could delete your entire library with one confirmation.
-3.  **Heavy AI Dependencies**: Features like Face Indexing (Task 9/10) require `torch` and `facenet-pytorch`.
+3.  **Heavy AI Dependencies**: Features like Face Indexing (Option 6) require `torch` and `facenet-pytorch`.
     *   *Risk*: These are large, complex libraries. If they aren't installed correctly, the tool will fail gracefully but these options will simply do nothing.
-4.  **Implicit Folder Naming**: Task 8 (Merge) relies on a very specific regex for folder names (e.g., `yyyy-mm-dd...`).
+4.  **Implicit Folder Naming**: Option 10 (Merge) relies on a very specific regex for folder names (e.g., `yyyy-mm-dd...`).
     *   *Risk*: If you name your folders manually in a different format, the Merge tool won't "see" them.
-5.  **Subprocess Vulnerability**: Task 5 launches Streamlit using a subprocess.
+5.  **Subprocess Vulnerability**: Option 8 launches Streamlit using a subprocess.
     *   *Risk*: On some systems, `sys.executable` might not point to the environment where Streamlit is installed, causing the dashboard to fail to launch.
 
 ---
 
-## Better Approaches & Missing Features
-
-If you are looking to improve the tool, here are the top recommendations:
+## Better Approaches & Missing Features (Architectural)
 
 ### 1. Hash-Based Metadata (Recommended)
 **Current**: Metadata filename = `hash(absolute_path).json`
@@ -65,8 +86,8 @@ If you are looking to improve the tool, here are the top recommendations:
 **Better**: An interactive interface where the tool shows you a face and asks, "Is this Sachin?" Once you say yes, it automatically builds the person's profile.
 
 ### 4. Safe-Delete Preview (Recommended)
-**Current**: Task 2 shows a count and asks for confirmation.
-**Better**: Task 2 should generate a "Trash" folder and move files there first instead of permanently deleting them (`unlink`), allowing for a final human review before the trash is emptied.
+**Current**: Option 4 shows a count and asks for confirmation.
+**Better**: Option 4 should generate a "Trash" folder and move files there first instead of permanently deleting them (`unlink`), allowing for a final human review before the trash is emptied.
 
 ### 5. Delta-Scanning (Recommended)
 **Current**: Scanning large libraries can still be slow as it checks every file.

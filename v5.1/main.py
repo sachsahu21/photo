@@ -436,56 +436,60 @@ def main():
                 return
         last = None
         while True:
-            print('')
-            print('  1.  Scan & Extract')
-            print('  1b. Resume Excel')
-            print('  2.  Delete Marked')
-            print('  3.  Organize')
-            print('  4.  Full (1>2>3)')
-            print('  5.  Web Dashboard')
-            print('  6.  Comparisons')
-            print('  7.  Convert Folder Structure')
-            print('  8.  Merge Same-Date Folders')
-            print('  9.  Build/Update Face Index')
-            print('  10. Find Person (Seed Photos)')
-            print('  0.  Exit')
+            print('\n  --- CORE WORKFLOW ---')
+            print('  1.  Full Automatic Flow (Scan + Delete + Organize)')
+            print('  2.  Scan & Extract (New Scan)')
+            print('  3.  Resume / Regenerate Excel (From Metadata)')
+            print('  4.  Execute Deletions (From Excel)')
+            print('  5.  Organize Files (Into Library)')
+
+            print('\n  --- AI & VISUAL TOOLS ---')
+            print('  6.  Face Discovery Suite (Index & Search)')
+            print('  7.  Visual Comparisons (HTML Groups)')
+            print('  8.  Web Dashboard (Streamlit)')
+
+            print('\n  --- MAINTENANCE ---')
+            print('  9.  Convert Library Structure (Flat/Year/Month)')
+            print('  10. Cleanup: Merge Same-Date Folders')
+
+            print('\n  0.  Exit')
+
             print('')
             ch = input('  Choice: ').strip().lower()
+
             if ch == '1':
                 last = task_1(config, logger)
-            elif ch == '1b':
-                last = task_1b(config, logger)
+                if last:
+                    if input('  Proceed to Delete Marked files? (yes/no): ').strip().lower() == 'yes':
+                        task_2(last, logger)
+                    if input('  Proceed to Organize files? (yes/no): ').strip().lower() == 'yes':
+                        task_3(last, config, logger)
             elif ch == '2':
-                p = input('  Excel (Enter=last): ').strip() or last
+                last = task_1(config, logger)
+            elif ch == '3':
+                last = task_1b(config, logger)
+            elif ch == '4':
+                p = input('  Excel Path (Enter=last): ').strip() or last
                 if p and Path(p).exists():
                     task_2(p, logger)
                 else:
-                    print('  Not found')
-            elif ch == '3':
-                p = input('  Excel (Enter=last): ').strip() or last
+                    print('  Excel file not found.')
+            elif ch == '5':
+                p = input('  Excel Path (Enter=last): ').strip() or last
                 if p and Path(p).exists():
                     task_3(p, config, logger)
                 else:
-                    print('  Not found')
-            elif ch == '4':
-                last = task_1(config, logger)
-                if last:
-                    if input('  Delete? (yes/no): ').strip().lower() == 'yes':
-                        task_2(last, logger)
-                    if input('  Organize? (yes/no): ').strip().lower() == 'yes':
-                        task_3(last, config, logger)
-            elif ch == '5':
-                try:
-                    import subprocess
-                    ap = Path(__file__).parent / 'web' / 'streamlit_app.py'
-                    if ap.exists():
-                        subprocess.Popen([sys.executable, '-m', 'streamlit', 'run', str(ap)])
-                        print('  http://localhost:8501')
-                    else:
-                        print('  Not found')
-                except Exception as e:
-                    print('  Error: ' + str(e))
+                    print('  Excel file not found.')
             elif ch == '6':
+                print('\n  [ FACE DISCOVERY ]')
+                print('  1. Build / Update Face Index')
+                print('  2. Find Person (Seed Photos)')
+                fch = input('  Choice (1/2): ').strip()
+                if fch == '1':
+                    task_9(config, logger)
+                elif fch == '2':
+                    task_10(config, logger)
+            elif ch == '7':
                 recs = load_bk()
                 if recs:
                     try:
@@ -496,14 +500,21 @@ def main():
                         print('  Generated ' + str(len(pg)) + ' pages')
                     except Exception as e:
                         print('  Error: ' + str(e))
-            elif ch == '7':
-                task_7(config, logger)
             elif ch == '8':
-                task_8(config, logger)
+                try:
+                    import subprocess
+                    ap = Path(__file__).parent / 'web' / 'streamlit_app.py'
+                    if ap.exists():
+                        subprocess.Popen([sys.executable, '-m', 'streamlit', 'run', str(ap)])
+                        print('   Dashboard: http://localhost:8501')
+                    else:
+                        print('  Dashboard app not found.')
+                except Exception as e:
+                    print('  Error: ' + str(e))
             elif ch == '9':
-                task_9(config, logger)
+                task_7(config, logger)
             elif ch == '10':
-                task_10(config, logger)
+                task_8(config, logger)
             elif ch == '0':
                 print('\n  Bye!')
                 break
