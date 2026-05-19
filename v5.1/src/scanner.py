@@ -272,11 +272,20 @@ class ImageScanner:
         file_type = self._detect_type(ext)
         mod_date = get_file_modification_date(filepath)
 
+        file_data = None
+        if file_type == 'image' and not self.fast_mode:
+            try:
+                # BOLT: Read image data once to avoid multiple disk I/O hits
+                with open(filepath, 'rb') as f:
+                    file_data = f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read {filepath}: {e}")
+
         file_hash = ''
         if file_type == 'video' and self.skip_video_hash:
             file_hash = ''
         elif self.duplicates_enabled:
-            file_hash = calculate_file_hash(filepath, self.hash_algorithm)
+            file_hash = calculate_file_hash(filepath, self.hash_algorithm, data=file_data)
 
         mod_str = mod_date.strftime('%Y-%m-%d %H:%M:%S') if mod_date else ''
 
@@ -295,15 +304,23 @@ class ImageScanner:
             pil_img = None
             cv2_img = None
 
+            import io
             if PIL_OK:
                 try:
-                    pil_img = PILImage.open(filepath)
+                    if file_data:
+                        pil_img = PILImage.open(io.BytesIO(file_data))
+                    else:
+                        pil_img = PILImage.open(filepath)
                 except Exception as e:
                     defaults['error'] = str(e)[:120]
 
             if CV2_OK and (self.blur_enabled or self.face_enabled):
                 try:
-                    cv2_img = cv2.imread(str(filepath))
+                    if file_data:
+                        nparr = np.frombuffer(file_data, np.uint8)
+                        cv2_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    else:
+                        cv2_img = cv2.imread(str(filepath))
                 except Exception:
                     pass
 
