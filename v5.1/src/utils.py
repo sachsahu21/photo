@@ -18,12 +18,17 @@ def thread_safe_print(msg):
         print(msg)
 
 
-def calculate_file_hash(filepath, algorithm='md5'):
+def calculate_file_hash(filepath, algorithm='md5', data=None):
     try:
+        if data is not None:
+            hasher = hashlib.new(algorithm)
+            hasher.update(data)
+            return hasher.hexdigest()
+
         filepath = Path(filepath)
         if not filepath.exists():
             return ""
-        hasher = hashlib.sha256() if algorithm == 'sha256' else hashlib.md5()
+        hasher = hashlib.new(algorithm)
         with open(filepath, 'rb') as f:
             while True:
                 chunk = f.read(HASH_BUFFER_SIZE)
