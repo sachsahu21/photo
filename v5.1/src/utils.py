@@ -1,4 +1,4 @@
-"""Utility Functions v4.1"""
+"""Utility Functions v5.1"""
 
 import re
 import hashlib

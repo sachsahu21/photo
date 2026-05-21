@@ -1,4 +1,4 @@
-"""Image Scanner v4.1"""
+"""Image Scanner v5.1"""
 
 import sys
 import logging
@@ -522,6 +522,7 @@ def menu_organize(config, logger, last_excel):
         print('  1.  Organize from Excel')
         print('  2.  Convert folder structure')
         print('  3.  Merge same-date folders')
+        print('  4.  Rollback (Undo) last organization')
         print('  0.  Back')
         ch = input('  Choice: ').strip().lower()
         if ch == '0':
@@ -536,6 +537,10 @@ def menu_organize(config, logger, last_excel):
             task_convert_structure(config, logger)
         elif ch == '3':
             task_merge_dates(config, logger)
+        elif ch == '4':
+            root = config.get('organization.output_folder')
+            if input(f'  Rollback all files in {root}? (yes/no): ').lower() == 'yes':
+                ImageOrganizer.rollback(root)
         else:
             print('  Invalid')
         input('\n  Enter to continue...')
@@ -567,7 +572,7 @@ def main():
     try:
         print('')
         print('  ========================================================')
-        print('       IMAGE SCANNER v5.0')
+        print('       IMAGE SCANNER v5.1')
         print('  ========================================================')
         config = ConfigManager()
         if not config.validate():

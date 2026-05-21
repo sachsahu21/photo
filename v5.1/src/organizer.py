@@ -1,4 +1,4 @@
-"""Image Organizer v4.1 - flat / year / year-month-date with converter and merge."""
+"""Image Organizer v5.1 - flat / year / year-month-date with converter and merge."""
 
 import re
 import json
@@ -356,7 +356,58 @@ class ImageOrganizer:
             mv.extend(self._org_normal(normal))
         self._fix_counts(mv)
         self._report(mv)
+        self._save_undo_log(mv)
         return mv
+
+    def _save_undo_log(self, mv):
+        try:
+            undo_data = []
+            for m in mv:
+                if m['status'] == 'Success' and m.get('source') and m.get('destination'):
+                    undo_data.append({
+                        'source': m['source'],
+                        'destination': m['destination'],
+                        'operation': self.op
+                    })
+            if undo_data:
+                log_path = self.output / 'organize_undo_log.json'
+                log_path.write_text(json.dumps(undo_data, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+
+    @staticmethod
+    def rollback(organized_root):
+        log_path = Path(organized_root) / 'organize_undo_log.json'
+        if not log_path.exists():
+            print('  No undo log found.')
+            return False
+        try:
+            data = json.loads(log_path.read_text(encoding='utf-8'))
+            print(f'  Rolling back {len(data)} operations...')
+            success = 0
+            for item in tqdm(data, desc='Rollback'):
+                src = Path(item['source'])
+                dst = Path(item['destination'])
+                if not dst.exists():
+                    continue
+                try:
+                    if not src.parent.exists():
+                        src.parent.mkdir(parents=True, exist_ok=True)
+                    if item['operation'] == 'move':
+                        shutil.move(str(dst), str(src))
+                    else:
+                        # For 'copy', we just delete the organized copy
+                        if dst.is_file():
+                            dst.unlink()
+                    success += 1
+                except Exception:
+                    pass
+            print(f'  Rollback complete: {success} files restored/removed.')
+            log_path.unlink()
+            return True
+        except Exception as e:
+            print(f'  Rollback failed: {e}')
+            return False
 
     def _org_ss(self, ss):
         mv = []

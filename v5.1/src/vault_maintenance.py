@@ -339,11 +339,20 @@ def delete_media_cascade(
             try:
                 p = Path(fp)
                 if p.is_file():
-                    p.unlink()
+                    from .workspace_paths import resolve_workspace_root
+                    trash_root = resolve_workspace_root(config) / ".trash"
+                    trash_root.mkdir(parents=True, exist_ok=True)
+                    # Use a unique subfolder per delete session or just per file to avoid name collisions
+                    trash_dest = trash_root / p.name
+                    if trash_dest.exists():
+                        # Simple collision avoidance: timestamp or random
+                        trash_dest = trash_root / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{p.name}"
+                    shutil.move(str(p), str(trash_dest))
                     stats["files_deleted"] += 1
                 else:
                     stats["files_missing"] += 1
-            except OSError:
+            except Exception as e:
+                logger.error(f"Trash move error: {e}")
                 stats["files_missing"] += 1
 
         jp = find_json_path(store, metadata_json_path=mp, media_id=mid, full_path=fp)

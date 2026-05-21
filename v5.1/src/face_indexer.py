@@ -1,5 +1,5 @@
 """
-Face Indexer v4.1
+Face Indexer v5.1
 
 Builds a local face embedding index (SQLite) and searches it using seed photos.
 Requires optional deps: facenet-pytorch + torch + torchvision.

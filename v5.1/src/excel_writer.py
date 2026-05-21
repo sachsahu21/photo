@@ -1,4 +1,4 @@
-"""Excel Report v4.1 - restored formatting and video columns."""
+"""Excel Report v5.1 - restored formatting and video columns."""
 
 import csv
 import logging

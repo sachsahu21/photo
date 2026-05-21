@@ -1,5 +1,5 @@
 """
-Image and Video Scanner v4.1
+Image and Video Scanner v5.1
 """
 
 import os

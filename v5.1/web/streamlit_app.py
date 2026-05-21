@@ -1,4 +1,4 @@
-"""Dashboard v4.1"""
+"""Dashboard v5.1"""
 
 import sys
 from pathlib import Path
@@ -22,8 +22,8 @@ def main():
     from src.config_manager import ConfigManager
     from src.workspace_paths import records_backup_path
 
-    st.set_page_config(page_title='Image Scanner v5.0', layout='wide')
-    st.title('Image Scanner v5.0')
+    st.set_page_config(page_title='Image Scanner v5.1', layout='wide')
+    st.title('Image Scanner v5.1')
     try:
         config = ConfigManager()
         if not config.validate():

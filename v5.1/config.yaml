@@ -1,5 +1,5 @@
 # =============================================================================
-# IMAGE SCANNER v5.0 — CONFIGURATION
+# IMAGE SCANNER v5.1 — CONFIGURATION
 # =============================================================================
 #
 # REQUIRED: workspace.root
@@ -23,13 +23,14 @@
 
 workspace:
   # REQUIRED absolute path — parent folder for all artifacts above.
-  root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\artifacts"
+  # Example: "C:\\Users\\ISSUser\\Desktop\\artifacts" or "/home/user/artifacts"
+  root: "./artifacts"
 
 # --- Photo libraries (NOT under workspace; you choose these paths) -----------
 
 scan:
   # REQUIRED. Source folder to scan for images/videos.
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test"
+  folder_path: "./sample_images"
   # true = include subfolders; false = top level only
   recursive: true
   extensions:
@@ -73,7 +74,7 @@ scan:
 
 organization:
   # Organized photo library output (copy/move from scan source).
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  output_folder: "./organized_images"
   # flat | year | year-month-date
   folder_structure: "flat"
   # copy = keep originals; move = relocate into organized tree
@@ -131,7 +132,7 @@ faces:
   index_db_filename: face_index.sqlite
   untagged_subfolder: untagged_people
   # Your seed photo library (NOT under workspace)
-  seed_root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
+  seed_root: "./seed_photos"
   target_person: ""
   # scan | organized — which library the face index searches
   library_source: "scan"

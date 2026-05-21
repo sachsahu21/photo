@@ -72,11 +72,19 @@ class MetadataStore:
         self.load_recursive = bool(meta_cfg.get("load_recursive", False))
 
     def _json_path_for_record(self, rec: Dict[str, Any]) -> Path:
+        """
+        Use content hash (MD5) as primary filename if available.
+        Fallback to SHA1 of path for untracked or non-hashed files.
+        """
+        md5 = str(rec.get("md5_hash") or "").strip().lower()
+        if md5:
+            return self.root / f"hash-{md5}.json"
+
         src = str(rec.get("full_path", "")).strip()
         if not src:
             src = str(rec.get("filename", "")).strip()
         key = hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()
-        return self.root / f"{key}.json"
+        return self.root / f"path-{key}.json"
 
     def _media_id_for_record(self, rec: Dict[str, Any], existing: Dict[str, Any] | None = None) -> str:
         if isinstance(existing, dict):

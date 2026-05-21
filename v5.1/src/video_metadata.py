@@ -1,4 +1,4 @@
-"""Video Metadata v4.1 - ffprobe + MediaInfo + OpenCV fallbacks."""
+"""Video Metadata v5.1 - ffprobe + MediaInfo + OpenCV fallbacks."""
 
 import os
 import logging

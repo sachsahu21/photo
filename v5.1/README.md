@@ -1,4 +1,4 @@
-# Image Scanner v5.0 (Metadata-First Workflow)
+# Image Scanner v5.1 (Metadata-First Workflow)
 
 This version uses a metadata-first flow:
 
@@ -16,13 +16,13 @@ This version uses a metadata-first flow:
 py -3.11 -m venv .venv311
 .venv311\Scripts\activate
 python -m pip install --upgrade pip setuptools wheel
-pip install -r v5.0/requirements.txt
+pip install -r v5.1/requirements.txt
 ```
 
-2. Run from `v5.0` folder:
+2. Run from `v5.1` folder:
 
 ```bash
-cd v5.0
+cd v5.1
 python main.py
 ```
 
@@ -84,7 +84,7 @@ Photo libraries stay outside workspace: `scan.folder_path`, `organization.output
 10. `Merge Same-Date Folders`
     Combine duplicate date/month folders under the organized root when configured.
 
-## Config Checklist (`v5.0/config.yaml`)
+## Config Checklist (`v5.1/config.yaml`)
 
 Set these before running:
 
