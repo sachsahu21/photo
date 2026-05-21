@@ -29,7 +29,8 @@ workspace:
 
 scan:
   # REQUIRED. Source folder to scan for images/videos.
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic"
+  # folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test2"
   # true = include subfolders; false = top level only
   recursive: true
   extensions:
@@ -123,15 +124,15 @@ metadata:
   # skip_if_present | update_missing | refresh | full_overwrite
   update_strategy: "update_missing"
   schema_version: "1.0"
-  tool_version: "v5.1"
+  tool_version: "v5.2"
 
 faces:
-  enabled: true
+  enabled: false
   data_subfolder: face_data
   index_db_filename: face_index.sqlite
   untagged_subfolder: untagged_people
-  # Your seed photo library (NOT under workspace)
-  seed_root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\1.Seed"
+  # Your seed photo library (will be placed under workspace.root/seed)
+  seed_root: "seed"
   target_person: ""
   # scan | organized — which library the face index searches
   library_source: "scan"

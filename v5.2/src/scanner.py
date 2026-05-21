@@ -254,6 +254,100 @@ class ImageScanner:
             return 'video'
         return 'other'
 
+    def analyze_folders(self, folder_path):
+        folder = Path(folder_path).expanduser().resolve()
+        if not folder.exists():
+            raise FileNotFoundError('Not found: ' + str(folder))
+        if not folder.is_dir():
+            raise NotADirectoryError('Not a directory: ' + str(folder))
+
+        stats = {
+            'total_folders': 0,
+            'total_size_bytes': 0,
+            'total_images': 0,
+            'total_videos': 0,
+            'total_others': 0,
+            'top_level': {},
+            'subfolders': {}
+        }
+        # Initialize top-level dictionaries
+        for item in folder.iterdir():
+            if item.is_dir():
+                stats['top_level'][item.name] = {
+                    'subfolders': 0,
+                    'size_bytes': 0,
+                    'images': 0,
+                    'videos': 0,
+                    'others': 0
+                }
+
+        for dp, dirnames, fns in os.walk(folder):
+            stats['total_folders'] += 1
+            
+            # Determine which top level folder this belongs to
+            rel_path = Path(dp).relative_to(folder)
+            top_name = None
+            sub_name = None
+            if len(rel_path.parts) > 0:
+                top_name = rel_path.parts[0]
+                if top_name in stats['top_level']:
+                    stats['top_level'][top_name]['subfolders'] += 1
+                    # Use full relative path for hierarchical view
+                    sub_name = str(rel_path)
+                    if sub_name not in stats['subfolders']:
+                        stats['subfolders'][sub_name] = {
+                            'size_bytes': 0,
+                            'images': 0,
+                            'videos': 0,
+                            'others': 0
+                        }
+
+            for fn in fns:
+                fp = Path(dp) / fn
+                try:
+                    size = fp.stat().st_size
+                except Exception:
+                    size = 0
+                
+                stats['total_size_bytes'] += size
+                if top_name and top_name in stats['top_level']:
+                    stats['top_level'][top_name]['size_bytes'] += size
+                if sub_name and sub_name in stats['subfolders']:
+                    stats['subfolders'][sub_name]['size_bytes'] += size
+                
+                ext = fp.suffix.lower()
+                f_type = self._detect_type(ext)
+                if f_type == 'image':
+                    stats['total_images'] += 1
+                    if top_name and top_name in stats['top_level']:
+                        stats['top_level'][top_name]['images'] += 1
+                    if sub_name and sub_name in stats['subfolders']:
+                        stats['subfolders'][sub_name]['images'] += 1
+                elif f_type == 'video':
+                    stats['total_videos'] += 1
+                    if top_name and top_name in stats['top_level']:
+                        stats['top_level'][top_name]['videos'] += 1
+                    if sub_name and sub_name in stats['subfolders']:
+                        stats['subfolders'][sub_name]['videos'] += 1
+                else:
+                    stats['total_others'] += 1
+                    if top_name and top_name in stats['top_level']:
+                        stats['top_level'][top_name]['others'] += 1
+                    if sub_name and sub_name in stats['subfolders']:
+                        stats['subfolders'][sub_name]['others'] += 1
+
+        # Fix subfolder count (os.walk includes the top-level directory itself)
+        for top_name in stats['top_level']:
+            if stats['top_level'][top_name]['subfolders'] > 0:
+                stats['top_level'][top_name]['subfolders'] -= 1
+        # Subfolders dict already holds correct counts
+
+        # Adjust total_folders to not count the root itself
+        if stats['total_folders'] > 0:
+            stats['total_folders'] -= 1
+
+        return stats
+
     @staticmethod
     def _bgr_from_pil(pil_img):
         """BGR ndarray for OpenCV when cv2.imread fails (e.g. HEIC via Pillow)."""

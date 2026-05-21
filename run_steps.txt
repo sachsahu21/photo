@@ -22,7 +22,7 @@ for v4.1
 py install 3.11
 py -3.11 -m venv .venv311
 .venv311\Scripts\activate
- cd .\v5.0\
+ cd .\v5.2\
 python main.py
 python -m pip install --upgrade pip setuptools wheel
 pip install -r v4.1/requirements.txt

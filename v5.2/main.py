@@ -129,6 +129,139 @@ def task_1(config, logger):
         return None
 
 
+def task_analyze_folders(config, logger):
+    # Import required libraries locally to avoid unnecessary global dependencies
+    import json
+    from datetime import datetime
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        Workbook = None
+
+    print('\n  TOOL: ANALYZE FOLDER AND FILE COUNTS')
+    print('  ' + '=' * 50)
+    default_path = config.get('scan.folder_path', '')
+    p = input(f'  Folder path to analyze (Enter={default_path}): ').strip()
+    if not p:
+        p = default_path
+
+    if not p or not Path(p).exists():
+        print('  Error: Invalid or missing folder path.')
+        return
+
+    print('  Analyzing directory tree, this may take a moment...')
+    try:
+        scanner = ImageScanner(config.to_dict())
+        stats = scanner.analyze_folders(p)
+
+        # Pretty‑print to console
+        print('\n  --- DIRECTORY BREAKDOWN ---')
+        for folder_name, fstats in stats['top_level'].items():
+            size_mb = fstats['size_bytes'] / (1024 * 1024)
+            print(f"  > {folder_name}/")
+            print(f"      Size:       {size_mb:.2f} MB")
+            print(f"      Subfolders: {fstats['subfolders']}")
+            print(f"      Images:     {fstats['images']}")
+            print(f"      Videos:     {fstats['videos']}")
+            print(f"      Others:     {fstats['others']}")
+            print('')
+
+        print('  --- OVERALL TOTALS ---')
+        total_size_mb = stats['total_size_bytes'] / (1024 * 1024)
+        print(f"  Total Size:       {total_size_mb:.2f} MB")
+        print(f"  Total Folders:    {stats['total_folders']}")
+        print(f"  Total Images:     {stats['total_images']}")
+        print(f"  Total Videos:     {stats['total_videos']}")
+        print(f"  Total Others:     {stats['total_others']}")
+
+        # Save analysis to Excel in workspace/folder_analysis
+        try:
+            workspace_root = Path(config.get('workspace.root'))
+            # Determine parent folder name from scanned path and include brackets
+            parent_name = Path(p).name
+            # Prepare output directory and filename
+            analysis_dir = workspace_root / 'folder_analysis'
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            filename = f'folder_analysis_{parent_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+            out_path = analysis_dir / filename
+
+            if Workbook:
+                wb = Workbook()
+                # Summary sheet
+                ws_summary = wb.active
+                ws_summary.title = 'Summary'
+                ws_summary.append(['Metric', 'Value'])
+                ws_summary.append(['Total Size (MB)', f"{total_size_mb:.2f}"])
+                ws_summary.append(['Total Folders', stats['total_folders']])
+                ws_summary.append(['Total Images', stats['total_images']])
+                ws_summary.append(['Total Videos', stats['total_videos']])
+                ws_summary.append(['Total Others', stats['total_others']])
+
+                # Details sheet per top-level folder
+                ws_detail = wb.create_sheet(title='Details')
+                ws_detail.append(['Full Path', 'Size (MB)', 'Subfolders', 'Images', 'Videos', 'Others'])
+                root_path = Path(p).resolve()
+                # Write top-level folder rows
+                for fname, fstats in stats['top_level'].items():
+                    size_mb = fstats['size_bytes'] / (1024 * 1024)
+                    ws_detail.append([
+                        str(root_path / fname),
+                        round(size_mb, 2),
+                        fstats['subfolders'],
+                        fstats['images'],
+                        fstats['videos'],
+                        fstats['others']
+                    ])
+                # Write subfolder rows
+                for sub_path, substats in stats['subfolders'].items():
+                    size_mb = substats['size_bytes'] / (1024 * 1024)
+                    ws_detail.append([
+                        str(root_path / sub_path),
+                        round(size_mb, 2),
+                        '',  # subfolders count not tracked for deeper levels
+                        substats['images'],
+                        substats['videos'],
+                        substats['others']
+                    ])
+                # Hierarchical view sheet
+                ws_hier = wb.create_sheet(title='Hierarchy')
+                ws_hier.append(['Path', 'Size (MB)', 'Subfolders', 'Images', 'Videos', 'Others'])
+                # Add top-level entries
+                for fname, fstats in stats['top_level'].items():
+                    size_mb = fstats['size_bytes'] / (1024 * 1024)
+                    ws_hier.append([fname, round(size_mb, 2), fstats['subfolders'], fstats['images'], fstats['videos'], fstats['others']])
+                # Add subfolder entries
+                for sub_path, substats in stats['subfolders'].items():
+                    size_mb = substats['size_bytes'] / (1024 * 1024)
+                    ws_hier.append([sub_path, round(size_mb, 2), '', substats['images'], substats['videos'], substats['others']])
+                # Determine folder with maximum size
+                if stats['top_level']:
+                    max_folder = max(stats['top_level'].items(), key=lambda kv: kv[1]['size_bytes'])
+                    max_name, max_stats = max_folder
+                    ws_max = wb.create_sheet(title='MaxFolder')
+                    ws_max.append(['Full Path', 'Size (MB)'])
+                    root_path = Path(p)
+                    max_full_path = str(root_path / max_name)
+                    ws_max.append([
+                        max_full_path,
+                        round(max_stats['size_bytes'] / (1024 * 1024), 2)
+                    ])
+                wb.save(out_path)
+                print(f'  Analysis saved to: {out_path}')
+            else:
+                # Fallback to JSON if openpyxl is unavailable
+                json_path = analysis_dir / f'folder_analysis_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(stats, f, indent=2)
+                print(f'  openpyxl not installed – analysis saved as JSON: {json_path}')
+        except Exception as e:
+            logger.error('Failed to save analysis: %s', e, exc_info=True)
+            print('  Error saving analysis: ' + str(e))
+    except Exception as e:
+        logger.error('Analyze folders: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
 def task_1b(config, logger):
     print('\n  STEP 2: GENERATE EXCEL FROM METADATA')
     cfg = config.to_dict()
@@ -465,6 +598,20 @@ def task_8(config, logger):
     return task_1b(config, logger)
 
 
+def task_update_counts(config, logger):
+    print('\n  TOOL: UPDATE PICTURE COUNTS ON FOLDERS')
+    print('  ' + '=' * 50)
+    source = config.get('organization.output_folder', './organized_images')
+    print('  Source folder: ' + str(source))
+    if not Path(source).exists():
+        print('  Error: Folder not found!')
+        return
+    if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
+        print('  Cancelled')
+        return
+    ImageOrganizer.update_all_pic_counts(source)
+
+
 def _vault_line(config) -> str:
     lines = []
     art = config.artifact_summary() if hasattr(config, 'artifact_summary') else {}
@@ -478,96 +625,6 @@ def _vault_line(config) -> str:
     if lr:
         lines.append('  Library root: ' + lr)
     return '\n'.join(lines)
-
-
-def menu_metadata(config, logger, last_excel):
-    while True:
-        print('')
-        print('  --- Metadata & Excel ---')
-        print(_vault_line(config))
-        ar = config.get('metadata.auto_reconcile_paths', True)
-        print('  Auto reconcile after delete/organize: ' + ('on' if ar else 'off'))
-        print('  1.  Generate / Refresh Metadata')
-        print('  2.  Generate Excel from Metadata')
-        print('  3.  Apply Excel Delete Actions')
-        print('  4.  Refresh Final Excel')
-        print('  5.  Update vault full paths  (reconcile + dedupe)')
-        print('  6.  Dedupe metadata vault only')
-        print('  7.  Cleanup untagged sample folders')
-        print('  0.  Back')
-        ch = input('  Choice: ').strip().lower()
-        if ch == '0':
-            return last_excel
-        if ch == '1':
-            task_1(config, logger)
-        elif ch == '2':
-            last_excel = task_1b(config, logger) or last_excel
-        elif ch == '3':
-            p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
-            if p and Path(p).exists():
-                task_2(p, config, logger)
-            else:
-                print('  Not found')
-        elif ch == '4':
-            last_excel = task_8(config, logger) or last_excel
-        elif ch == '5':
-            task_reconcile_paths(config, logger)
-        elif ch == '6':
-            task_dedupe_vault(config, logger)
-        elif ch == '7':
-            task_cleanup_untagged(config, logger)
-        else:
-            print('  Invalid')
-        input('\n  Enter to continue...')
-
-
-def menu_organize(config, logger, last_excel):
-    while True:
-        print('')
-        print('  --- Organize library ---')
-        print('  Output: ' + str(config.get('organization.output_folder', '')))
-        print('  1.  Organize from Excel')
-        print('  2.  Convert folder structure')
-        print('  3.  Merge same-date folders')
-        print('  0.  Back')
-        ch = input('  Choice: ').strip().lower()
-        if ch == '0':
-            return
-        if ch == '1':
-            p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
-            if p and Path(p).exists():
-                task_3(p, config, logger)
-            else:
-                print('  Not found')
-        elif ch == '2':
-            task_convert_structure(config, logger)
-        elif ch == '3':
-            task_merge_dates(config, logger)
-        else:
-            print('  Invalid')
-        input('\n  Enter to continue...')
-
-
-def menu_faces(config, logger):
-    while True:
-        print('')
-        print('  --- Faces ---')
-        print('  1.  Build / Update Face Index')
-        print('  2.  People Tag Sync + Untagged Samples')
-        print('  3.  Seed Feedback Refresh')
-        print('  0.  Back')
-        ch = input('  Choice: ').strip().lower()
-        if ch == '0':
-            return
-        if ch == '1':
-            task_5(config, logger)
-        elif ch == '2':
-            task_6(config, logger)
-        elif ch == '3':
-            task_7(config, logger)
-        else:
-            print('  Invalid')
-        input('\n  Enter to continue...')
 
 
 def main():
@@ -601,26 +658,79 @@ def main():
             print('  Features: ' + ', '.join(ft))
         last_excel = load_last_excel_path(config)
         while True:
-            print('')
+            print('\n' + '=' * 56)
             print(_vault_line(config))
-            print('  1.  Metadata & Excel')
-            print('  2.  Organize library')
-            print('  3.  Faces')
-            print('  0.  Exit')
-            print('')
+            print('\n  --- SCAN & VAULT ---')
+            print('  11. Analyze folder and file counts')
+            print('  12. Generate / Refresh Metadata')
+            print('  13. Update vault full paths (reconcile + dedupe)')
+            print('  14. Dedupe metadata vault only')
+            print('  15. Cleanup untagged sample folders')
+            
+            print('\n  --- EXCEL & CURATION ---')
+            print('  21. Generate Excel from Metadata')
+            print('  22. Apply Excel Delete Actions')
+            print('  23. Refresh Final Excel')
+            
+            print('\n  --- ORGANIZE & STRUCTURE ---')
+            print('  31. Organize library from Excel')
+            print('  32. Convert folder structure')
+            print('  33. Merge same-date folders')
+            print('  34. Update picture counts on folders')
+
+            print('\n  --- FACE INDEX & PEOPLE ---')
+            print('  41. Build / Update Face Index')
+            print('  42. People Tag Sync + Untagged Samples')
+            print('  43. Seed Feedback Refresh')
+
+            print('\n  0.  Exit')
+            print('=' * 56)
             ch = input('  Choice: ').strip().lower()
-            if ch == '1':
-                last_excel = menu_metadata(config, logger, last_excel) or last_excel
-            elif ch == '2':
-                menu_organize(config, logger, last_excel)
-            elif ch == '3':
-                menu_faces(config, logger)
+
+            if ch == '11':
+                task_analyze_folders(config, logger)
+            elif ch == '12':
+                task_1(config, logger)
+            elif ch == '13':
+                task_reconcile_paths(config, logger)
+            elif ch == '14':
+                task_dedupe_vault(config, logger)
+            elif ch == '15':
+                task_cleanup_untagged(config, logger)
+            elif ch == '21':
+                last_excel = task_1b(config, logger) or last_excel
+            elif ch == '22':
+                p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
+                if p and Path(p).exists():
+                    task_2(p, config, logger)
+                else:
+                    print('  Not found')
+            elif ch == '23':
+                last_excel = task_8(config, logger) or last_excel
+            elif ch == '31':
+                p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
+                if p and Path(p).exists():
+                    task_3(p, config, logger)
+                else:
+                    print('  Not found')
+            elif ch == '32':
+                task_convert_structure(config, logger)
+            elif ch == '33':
+                task_merge_dates(config, logger)
+            elif ch == '34':
+                task_update_counts(config, logger)
+            elif ch == '41':
+                task_5(config, logger)
+            elif ch == '42':
+                task_6(config, logger)
+            elif ch == '43':
+                task_7(config, logger)
             elif ch == '0':
                 print('\n  Bye!')
                 break
             else:
-                print('  Invalid')
-            input('\n  Enter to continue...')
+                print('  Invalid choice')
+            
     except KeyboardInterrupt:
         print('\n  Interrupted')
         sys.exit(1)

@@ -681,6 +681,36 @@ class ImageOrganizer:
     def detect_structure(root_folder):
         return detect_structure(root_folder)
 
+    @staticmethod
+    def update_all_pic_counts(source_folder):
+        source = Path(source_folder)
+        if not source.exists():
+            print('  Error: Source not found: ' + str(source))
+            return False
+        print('  Scanning all folders...')
+        folders = _collect_all_folders(source)
+        if not folders:
+            print('  No folders found to check!')
+            return False
+        
+        renamed = 0
+        from tqdm import tqdm
+        for fd in tqdm(folders, desc='  Updating counts', disable=False):
+            old_path = Path(fd['path'])
+            if fd.get('current') == 'unaligned':
+                updated_path = _normalize_unaligned_folder_name(old_path)
+                if updated_path:
+                    renamed += 1
+                continue
+
+            new_total = _count_files(old_path)
+            updated_name = _update_pic_count(old_path, new_total)
+            if updated_name:
+                renamed += 1
+                
+        print('  Updated: ' + str(renamed) + ' folders')
+        return True
+
 
 def _merge_same_date_folders(root, structure):
     root = Path(root)

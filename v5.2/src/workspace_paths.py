@@ -117,6 +117,9 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
         faces, "untagged_root", DEFAULTS["untagged_people"], alt_keys=("untagged_subfolder",)
     )
     faces["untagged_root"] = str(W / untag_sub)
+    # Resolve seed_root under workspace.root
+    seed_sub = subdir_from_section(faces, "seed_root", "seed")
+    faces["seed_root"] = str(W / seed_sub) if not is_absolute_path(seed_sub) else seed_sub
 
     out = config.setdefault("output", {})
     out_sub = subdir_from_section(out, "output_folder", DEFAULTS["reports"])
