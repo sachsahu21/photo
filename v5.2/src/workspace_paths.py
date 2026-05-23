@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 BACKUP_FILENAME = "records-backup.pkl"
 CHECKPOINT_FILENAME = ".scan_checkpoint.json"
 LOG_FILENAME = "image-scanner.log"
-DEFAULT_INDEX_DB = "face_index.sqlite"
+GLOBAL_CHECKPOINT_FILENAME = "global_checkpoint.json"
 
 # Default subfolder names under workspace.root
 DEFAULTS = {
@@ -103,21 +103,7 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     )
     faces["data_folder"] = str(W / data_sub)
 
-    idx_name = str(
-        faces.get("index_db_filename")
-        or faces.get("index_db")
-        or DEFAULT_INDEX_DB
-    ).strip()
-    idx_name = Path(idx_name.replace("\\", "/")).name or DEFAULT_INDEX_DB
-    if not idx_name.endswith((".sqlite", ".db")):
-        idx_name = DEFAULT_INDEX_DB
-    faces["index_db"] = str(Path(faces["data_folder"]) / idx_name)
 
-    untag_sub = subdir_from_section(
-        faces, "untagged_root", DEFAULTS["untagged_people"], alt_keys=("untagged_subfolder",)
-    )
-    faces["untagged_root"] = str(W / untag_sub)
-    # Resolve seed_root under workspace.root
     seed_sub = subdir_from_section(faces, "seed_root", "seed")
     faces["seed_root"] = str(W / seed_sub) if not is_absolute_path(seed_sub) else seed_sub
 
@@ -146,5 +132,6 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     else:
         ck_name = CHECKPOINT_FILENAME
     proc["checkpoint_file"] = str(W / ck_name)
+    proc["global_checkpoint_file"] = str(W / GLOBAL_CHECKPOINT_FILENAME)
 
     config.setdefault("workspace", {})["_resolved_root"] = str(W)

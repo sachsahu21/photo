@@ -168,11 +168,11 @@ class ImageScanner:
             return []
 
         checkpoint = None
+        # Load per-scan checkpoint if enabled
+        checkpoint = None
         if self.checkpoint_enabled:
             if not self.checkpoint_file:
-                raise ValueError(
-                    'processing.checkpoint_file not resolved; set workspace.root in config.yaml'
-                )
+                raise ValueError('processing.checkpoint_file not resolved; set workspace.root in config.yaml')
             from .checkpoint_manager import CheckpointManager
             checkpoint = CheckpointManager(
                 interval=self.checkpoint_interval,
@@ -180,11 +180,35 @@ class ImageScanner:
             )
             if checkpoint.load():
                 files = [f for f in files if not checkpoint.is_processed(str(f))]
+        # Load global checkpoint
+        global_cp_path = self.config.get('processing', {}).get('global_checkpoint_file')
+        processed_set = set()
+        last_index = -1
+        if global_cp_path:
+            from .global_checkpoint import load_global_checkpoint, save_global_checkpoint
+            if os.path.exists(global_cp_path):
+                gp = load_global_checkpoint(global_cp_path)
+                processed_set = set(gp.get('processed', []))
+                last_index = gp.get('last_index', -1)
+        # Filter out already processed files from global checkpoint
+        if processed_set:
+            files = [f for f in files if str(f) not in processed_set]
 
         if self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
             records = self._scan_parallel(files, checkpoint)
         else:
             records = self._scan_sequential(files, checkpoint)
+        # After scanning, update global checkpoint with newly processed files
+        if global_cp_path:
+            new_processed = set()
+            for rec in records:
+                fp = rec.get('full_path') or rec.get('file_path')
+                if fp:
+                    new_processed.add(str(Path(fp)))
+            processed_set.update(new_processed)
+            # Save updated global checkpoint
+            from .global_checkpoint import save_global_checkpoint
+            save_global_checkpoint(global_cp_path, list(processed_set), len(processed_set)-1)
 
         if self.geo_enabled and self._geocoder:
             self._batch_geocode(records)

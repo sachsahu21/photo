@@ -660,28 +660,27 @@ def main():
         while True:
             print('\n' + '=' * 56)
             print(_vault_line(config))
-            print('\n  --- SCAN & VAULT ---')
-            print('  11. Analyze folder and file counts')
-            print('  12. Generate / Refresh Metadata')
-            print('  13. Update vault full paths (reconcile + dedupe)')
-            print('  14. Dedupe metadata vault only')
-            print('  15. Cleanup untagged sample folders')
+            print('\n  --- 1. METADATA OPERATIONS ---')
+            print('  11. Analyze scan folder and file counts')
+            print('  12. Build / Refresh Metadata Vault')
+            print('  13. Reconcile & Dedupe Vault Paths')
+            print('  14. Delete duplicate metadata')
+            print('  15. Remove untagged sample folders')
+            print('  16. Export Scanned‑Pending report')
+            print('\n  --- 2. EXCEL & DATA ---')
+            print('  21. Generate/Refresh Excel')
+            print('  22. Apply Excel delete actions')
             
-            print('\n  --- EXCEL & CURATION ---')
-            print('  21. Generate Excel from Metadata')
-            print('  22. Apply Excel Delete Actions')
-            print('  23. Refresh Final Excel')
-            
-            print('\n  --- ORGANIZE & STRUCTURE ---')
+            print('\n  --- 3. LIBRARY ORGANIZATION ---')
             print('  31. Organize library from Excel')
             print('  32. Convert folder structure')
-            print('  33. Merge same-date folders')
-            print('  34. Update picture counts on folders')
+            print('  33. Merge duplicate dates')
+            print('  34. Update picture counts')
 
-            print('\n  --- FACE INDEX & PEOPLE ---')
-            print('  41. Build / Update Face Index')
-            print('  42. People Tag Sync + Untagged Samples')
-            print('  43. Seed Feedback Refresh')
+            print('\n  --- 4. FACES & PEOPLE ---')
+            print('  41. Build/Update face index')
+            print('  42. Sync people tags')
+            print('  43. Refresh seed feedback')
 
             print('\n  0.  Exit')
             print('=' * 56)
@@ -697,6 +696,10 @@ def main():
                 task_dedupe_vault(config, logger)
             elif ch == '15':
                 task_cleanup_untagged(config, logger)
+            elif ch == '16':
+                # Run custom report generator
+                from src import generate_report
+                generate_report.main()
             elif ch == '21':
                 last_excel = task_1b(config, logger) or last_excel
             elif ch == '22':
@@ -705,8 +708,7 @@ def main():
                     task_2(p, config, logger)
                 else:
                     print('  Not found')
-            elif ch == '23':
-                last_excel = task_8(config, logger) or last_excel
+
             elif ch == '31':
                 p = input('  Excel (Enter=last): ').strip() or last_excel or load_last_excel_path(config) or ''
                 if p and Path(p).exists():
