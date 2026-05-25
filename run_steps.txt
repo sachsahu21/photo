@@ -39,8 +39,9 @@ opus-streamlit_v4 - folders in 000 format and updated count, similar pics screen
 v4.0 cursor
 v5.0 - cursor,  with face detection and clear to ptions
 v5.1 - Jules
-v5.2 - anti gravity
-v5.1 - VS code
+v5.2 - anti gravity - locked the version its working properly (commit #1)
+v6.2 live version 
+
 
 
 
