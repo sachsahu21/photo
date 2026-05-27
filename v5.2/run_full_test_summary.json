@@ -1,10 +1,10 @@
 {
-  "analyze_folders": "OK",
+  "analyze_folders": "Error: EOF when reading a line\nTraceback (most recent call last):\n  File \"C:\\Users\\ISSUser\\Desktop\\Sachin\\git\\photo\\v5.2\\run_full_test.py\", line 12, in run_test_suite\n    task_analyze_folders(config, logger)\n    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\ISSUser\\Desktop\\Sachin\\git\\photo\\v5.2\\main.py\", line 144, in task_analyze_folders\n    p = input(f'  Folder path to analyze (Enter={default_path}): ').strip()\n        ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nEOFError: EOF when reading a line\n",
   "metadata_scan": "OK",
-  "excel_report": "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\artifacts\\reports\\image-scan-hdd-20260521-185853.xlsx",
+  "excel_report": "Failed",
   "organize": "OK",
   "face_index": "OK",
   "people_sync": "OK",
   "seed_refresh": "OK",
-  "total_time_seconds": 24.584298849105835
+  "total_time_seconds": 245994.4997677803
 }

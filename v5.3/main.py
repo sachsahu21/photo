@@ -3,10 +3,13 @@
 import os
 os.environ["OPENCV_LOG_LEVEL"] = "FATAL"
 
+import csv
 import sys
+import shutil
 import logging
 import pickle
 from pathlib import Path
+from datetime import datetime
 
 from src.config_manager import ConfigManager
 from src.scanner import ImageScanner
@@ -72,6 +75,134 @@ def load_bk(config):
         return None
 
 
+def _norm_path(value):
+    try:
+        return str(Path(str(value)).expanduser().resolve()).lower()
+    except Exception:
+        return str(value or '').strip().lower()
+
+
+def _record_path_set(records):
+    paths = set()
+    for rec in records or []:
+        fp = rec.get('full_path') or rec.get('file_path')
+        if fp:
+            paths.add(_norm_path(fp))
+    return paths
+
+
+def _with_scan_defaults(records):
+    for r in records or []:
+        if not r.get('delete_flag'):
+            r['delete_flag'] = 'No'
+        r.setdefault('is_duplicate', 'No')
+        r.setdefault('duplicate_group', '')
+        r.setdefault('is_best_in_group', '')
+        r.setdefault('recommendation', '')
+        r.setdefault('is_similar', 'No')
+        r.setdefault('similar_group', '')
+        r.setdefault('similar_score', '')
+        r.setdefault('similar_methods', '')
+    return records
+
+
+def _make_batch_writer(config):
+    try:
+        interval = int(config.get('processing.metadata_flush_interval', 100) or 100)
+    except (TypeError, ValueError):
+        interval = 100
+    interval = max(1, interval)
+    cfg = config.to_dict()
+    md_store = MetadataStore(cfg)
+    pending = []
+    count = 0
+
+    def flush(force=False):
+        nonlocal pending
+        if not pending:
+            return
+        if not force and len(pending) < interval:
+            return
+        batch = _with_scan_defaults(list(pending))
+        md_store.upsert_records(batch)
+        try:
+            md_store.rebuild_index()
+        except Exception:
+            pass
+        print('  Metadata batch saved: ' + str(len(batch)) + ' records')
+        pending = []
+
+    def on_record(rec):
+        nonlocal count
+        pending.append(rec)
+        count += 1
+        if count % interval == 0:
+            flush(force=True)
+
+    return on_record, lambda: flush(force=True)
+
+
+def _export_missing_metadata_report(config, missing_paths):
+    reports = Path(config.get('output.output_folder') or Path(config.get('workspace.root')) / 'reports')
+    reports.mkdir(parents=True, exist_ok=True)
+    out = reports / ('missing-metadata-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '.csv')
+    with open(out, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['full_path'])
+        for p in sorted(missing_paths):
+            writer.writerow([p])
+    print('  Missing metadata report: ' + str(out))
+    return out
+
+
+def _missing_metadata_paths(records, config):
+    expected = {}
+    for rec in records or []:
+        fp = rec.get('full_path') or rec.get('file_path')
+        if fp:
+            expected[_norm_path(fp)] = str(fp)
+    if not expected:
+        return []
+    stored = _record_path_set(MetadataStore(config.to_dict()).load_records())
+    return [original for key, original in expected.items() if key not in stored]
+
+
+def _handle_missing_metadata(missing_paths, config, logger):
+    if not missing_paths:
+        print('  Metadata verification: all scanned files have metadata JSON')
+        return
+    print('  Metadata verification: ' + str(len(missing_paths)) + ' file(s) missing metadata JSON')
+    while True:
+        print('  1. Rescan missing files only')
+        print('  2. Export missing metadata report')
+        print('  3. Ignore for now')
+        ch = input('  Choice (1/2/3): ').strip()
+        if ch == '1':
+            try:
+                scanner = ImageScanner(config.to_dict())
+                on_record, flush = _make_batch_writer(config)
+                repaired = scanner.scan_files(missing_paths, batch_callback=on_record)
+                flush()
+                if repaired:
+                    MetadataStore(config.to_dict()).upsert_records(_with_scan_defaults(repaired))
+                    MetadataStore(config.to_dict()).rebuild_index()
+                print('  Repaired metadata files: ' + str(len(repaired)))
+            except Exception as e:
+                logger.error('Missing metadata repair: %s', e, exc_info=True)
+                print('  Repair error: ' + str(e))
+            return
+        if ch == '2':
+            try:
+                _export_missing_metadata_report(config, missing_paths)
+            except Exception as e:
+                print('  Report error: ' + str(e))
+            return
+        if ch == '3' or ch == '':
+            print('  Ignored for now')
+            return
+        print('  Invalid choice')
+
+
 def task_1(config, logger):
     print('\n  STEP 1: GENERATE / REFRESH METADATA')
     print('  ' + '=' * 50)
@@ -80,14 +211,15 @@ def task_1(config, logger):
         scanner = ImageScanner(config.to_dict())
         sf = config.get('scan.folder_path')
         print('  Scanning: ' + str(sf))
-        records = scanner.scan(sf)
+        on_record, flush_batches = _make_batch_writer(config)
+        records = scanner.scan(sf, batch_callback=on_record)
+        flush_batches()
         if not records:
             print('  No files!')
             return None
         print('  Found ' + str(len(records)) + ' files')
-        for r in records:
-            if not r.get('delete_flag'):
-                r['delete_flag'] = 'No'
+        records = _with_scan_defaults(records)
+        scanned_records = list(records)
         if config.get('duplicates.enabled', True):
             print('  Detecting duplicates...')
             records = DuplicateHandler(
@@ -123,6 +255,8 @@ def task_1(config, logger):
             records = MetadataStore(config.to_dict()).load_records()
         print('  Metadata JSON: ' + str(len(records)) + ' records')
         save_bk(records, config)
+        missing_paths = _missing_metadata_paths(scanned_records, config)
+        _handle_missing_metadata(missing_paths, config, logger)
         return str(md_store.root)
     except Exception as e:
         logger.error('Task 1: %s', e, exc_info=True)
@@ -327,6 +461,186 @@ def task_dedupe_vault(config, logger):
     try:
         dedupe_vault(config.to_dict())
     except Exception as e:
+        print('  Error: ' + str(e))
+
+
+def _path_under(path, root):
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _generated_delete_target(path, workspace_root, protected_roots):
+    p = Path(path).expanduser()
+    if not p:
+        return None
+    try:
+        rp = p.resolve()
+        wr = Path(workspace_root).resolve()
+    except Exception:
+        return None
+    if rp == wr or not _path_under(rp, wr):
+        return None
+    for root in protected_roots:
+        if root and _path_under(rp, root):
+            return None
+    return rp
+
+
+def task_fresh_restart_metadata(config, logger):
+    print('\n  FRESH RESTART METADATA VAULT')
+    print('  ' + '=' * 50)
+    try:
+        workspace_root = Path(config.get('workspace.root')).expanduser().resolve()
+        protected_roots = [
+            config.get('scan.folder_path'),
+            config.get('organization.output_folder'),
+        ]
+        targets = []
+        metadata_root = config.get('metadata.root_folder')
+        if metadata_root:
+            targets.append(('metadata folder', metadata_root))
+        checkpoint_file = config.get('processing.checkpoint_file')
+        if checkpoint_file:
+            targets.append(('checkpoints folder', str(Path(checkpoint_file).parent)))
+        backup = records_backup_path(config)
+        targets.append(('records backup', str(backup)))
+
+        safe_targets = []
+        for label, raw in targets:
+            target = _generated_delete_target(raw, workspace_root, protected_roots)
+            if target:
+                safe_targets.append((label, target))
+            else:
+                print('  Skipped unsafe target: ' + label + ' -> ' + str(raw))
+
+        if not safe_targets:
+            print('  Nothing safe to delete.')
+            return
+
+        print('  This deletes generated metadata state only:')
+        for label, target in safe_targets:
+            print('  - ' + label + ': ' + str(target))
+        print('  Photos are not deleted from scan or organized folders.')
+        if input('  Type DELETE METADATA to continue: ').strip() != 'DELETE METADATA':
+            print('  Cancelled')
+            return
+
+        removed = 0
+        for label, target in safe_targets:
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                    removed += 1
+                elif target.is_file():
+                    target.unlink()
+                    removed += 1
+            except Exception as e:
+                logger.error('Fresh restart delete %s: %s', target, e, exc_info=True)
+                print('  Could not delete ' + label + ': ' + str(e))
+
+        Path(config.get('metadata.root_folder')).mkdir(parents=True, exist_ok=True)
+        if checkpoint_file:
+            Path(checkpoint_file).parent.mkdir(parents=True, exist_ok=True)
+        print('  Removed generated target(s): ' + str(removed))
+        print('  Fresh metadata restart is ready.')
+    except Exception as e:
+        logger.error('Fresh restart metadata: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
+def _missing_value(value):
+    if value is None:
+        return True
+    if value == '' or value == [] or value == {}:
+        return True
+    if isinstance(value, str) and value.strip().lower() in ('unknown', 'none', 'no exif'):
+        return True
+    return False
+
+
+def _merge_missing_record(existing, fresh):
+    merged = dict(existing or {})
+    for key, value in (fresh or {}).items():
+        if _missing_value(value):
+            continue
+        if key not in merged or _missing_value(merged.get(key)):
+            merged[key] = value
+    if fresh.get('last_seen_at'):
+        merged['last_seen_at'] = fresh.get('last_seen_at')
+    return merged
+
+
+def task_enrich_metadata(config, logger):
+    print('\n  ENRICH EXISTING METADATA')
+    print('  ' + '=' * 50)
+    try:
+        md_store = MetadataStore(config.to_dict())
+        existing = md_store.load_records(exclude_missing=False)
+        if not existing:
+            print('  No metadata records found. Run Build / Refresh first.')
+            return
+        by_path = {}
+        files = []
+        for rec in existing:
+            fp = str(rec.get('full_path') or '').strip()
+            if fp and Path(fp).is_file():
+                key = _norm_path(fp)
+                by_path[key] = rec
+                files.append(fp)
+        files = sorted(set(files))
+        if not files:
+            print('  No existing metadata records point to files on disk.')
+            return
+        print('  Files to enrich: ' + str(len(files)))
+        print('  Mode: fill missing fields only; global checkpoint is ignored.')
+        if input('  Proceed? (yes/no): ').strip().lower() != 'yes':
+            print('  Cancelled')
+            return
+
+        try:
+            interval = int(config.get('processing.metadata_flush_interval', 100) or 100)
+        except (TypeError, ValueError):
+            interval = 100
+        interval = max(1, interval)
+        pending = []
+        enriched = []
+
+        def flush(force=False):
+            nonlocal pending
+            if not pending:
+                return
+            if not force and len(pending) < interval:
+                return
+            batch = _with_scan_defaults(list(pending))
+            md_store.upsert_records(batch)
+            try:
+                md_store.rebuild_index()
+            except Exception:
+                pass
+            print('  Enrichment batch saved: ' + str(len(batch)) + ' records')
+            pending = []
+
+        def on_record(fresh):
+            key = _norm_path(fresh.get('full_path') or fresh.get('file_path') or '')
+            merged = _merge_missing_record(by_path.get(key, {}), fresh)
+            pending.append(merged)
+            enriched.append(merged)
+            if len(enriched) % interval == 0:
+                flush(force=True)
+
+        scanner = ImageScanner(config.to_dict())
+        scanner.scan_files(files, batch_callback=on_record)
+        flush(force=True)
+        if enriched:
+            md_store.upsert_records(_with_scan_defaults(enriched))
+            md_store.rebuild_index()
+            save_bk(md_store.load_records(exclude_missing=False), config)
+        print('  Enriched metadata records: ' + str(len(enriched)))
+    except Exception as e:
+        logger.error('Enrich metadata: %s', e, exc_info=True)
         print('  Error: ' + str(e))
 
 
@@ -671,6 +985,8 @@ def main():
             print('  21. Build / Refresh Metadata Vault')
             print('  22. Reconcile Vault Paths (Update to latest)')
             print('  23. Clean / Dedupe Metadata files')
+            print('  24. Fresh restart metadata vault')
+            print('  25. Enrich existing metadata')
 
             print('\n  --- 3. EXCEL & DATA ---')
             print('  31. Generate/Refresh Excel')
@@ -703,6 +1019,10 @@ def main():
                 task_reconcile_paths(config, logger)
             elif ch == '23':
                 task_dedupe_vault(config, logger)
+            elif ch == '24':
+                task_fresh_restart_metadata(config, logger)
+            elif ch == '25':
+                task_enrich_metadata(config, logger)
             elif ch == '31':
                 last_excel = task_1b(config, logger) or last_excel
             elif ch == '32':

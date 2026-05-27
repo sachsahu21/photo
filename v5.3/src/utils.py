@@ -231,17 +231,34 @@ def safe_filename(filename, max_length=255):
 def get_record_defaults():
     return {
         'filename': '', 'folder': '', 'full_path': '',
-        'extension': '', 'file_type': '', 'size_mb': 0.0,
-        'file_modified': '', 'md5_hash': '', 'delete_flag': 'No', 'error': None,
+        'extension': '', 'file_type': '', 'mime_type': '',
+        'size_bytes': 0, 'size_mb': 0.0,
+        'relative_path': '', 'parent_folder': '',
+        'source_root': '', 'source_type': 'local',
+        'first_seen_at': '', 'last_seen_at': '',
+        'created_time': '', 'modified_time': '', 'accessed_time': '',
+        'file_modified': '', 'md5_hash': '', 'sha256_hash': '',
+        'delete_flag': 'No', 'error': None,
 
-        'width': None, 'height': None, 'mode': None, 'dpi': None,
+        'width': None, 'height': None, 'megapixels': None,
+        'aspect_ratio': None, 'orientation': None,
+        'mode': None, 'dpi': None, 'has_alpha': None,
+        'color_space': None, 'compression': None,
         'date_taken': None, 'date_source': 'None',
+        'effective_date_source': '',
+        'effective_organize_date': '',
+        'year': None, 'month': None, 'day': None,
+        'google_photo_taken_time': None, 'google_creation_time': None,
         'camera_make': None, 'camera_model': None,
-        'focal_length': None, 'aperture': None, 'iso': None, 'exposure_time': None,
-        'gps_lat': None, 'gps_lon': None, 'has_exif': False,
+        'lens_model': None, 'focal_length': None, 'aperture': None,
+        'iso': None, 'exposure_time': None, 'flash': None,
+        'white_balance': None, 'software': None, 'exif_orientation': None,
+        'gps_lat': None, 'gps_lon': None, 'gps_altitude': None,
+        'has_exif': False,
 
         'is_blurry': None, 'blur_score': None, 'quality_rating': 'Unknown',
         'quality_score': None, 'quality_issues': '',
+        'brightness_score': None, 'contrast_score': None, 'noise_score': None,
 
         'video_duration_sec': None, 'video_duration_fmt': '',
         'video_width': None, 'video_height': None, 'video_fps': None,
@@ -253,12 +270,22 @@ def get_record_defaults():
         'recommendation': '',
 
         'face_count': 0, 'face_category': 'No People',
+        'face_search_ready': False, 'face_boxes': [],
         'thumbnail_path': None, 'cluster_id': None, 'cluster_label': None,
-        'location_city': None, 'location_country': None, 'location_name': None,
+        'location_city': None, 'location_state': None,
+        'location_country': None, 'location_name': None,
         'auto_tags': None, 'primary_tag': None,
+        'manual_tags': [], 'scene_type': None, 'event': None,
 
         'metadata_status': 'Unknown',
         'is_similar': 'No', 'similar_group': '',
         'similar_methods': '', 'similar_score': '',
+        'ahash': None, 'phash': None, 'dhash': None,
+
+        'cloud_provider': 'none', 'cloud_account_id': None,
+        'cloud_drive_id': None, 'cloud_item_id': None,
+        'cloud_drive_path': None, 'cloud_web_url': None,
+        'cloud_etag': None, 'cloud_downloaded': False,
+        'cloud_local_cache_path': None, 'cloud_provider_raw': {},
     }
 

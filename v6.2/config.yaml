@@ -29,7 +29,7 @@ workspace:
 
 scan:
   # REQUIRED. Source folder to scan for images/videos.
-  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic"
+  # folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic"
   # folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test2"
   # true = include subfolders; false = top level only
   recursive: true

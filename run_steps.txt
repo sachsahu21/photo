@@ -36,10 +36,11 @@ opus-streamlit - working perfectly ( advanced takes more time )
 opus-streamlit_v2 - lighter version and fast ( advanced takes more time )
 opus-streamlit_v3 - folder format with pic number, screenshot and WA images
 opus-streamlit_v4 - folders in 000 format and updated count, similar pics screenshot and WA images
-v4.0 cursor
+v4.0 - cursor
 v5.0 - cursor,  with face detection and clear to ptions
 v5.1 - Jules
 v5.2 - anti gravity - locked the version its working properly (commit #1)
+v5.3 - Codex
 v6.2 live version 
 
 

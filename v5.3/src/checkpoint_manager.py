@@ -32,7 +32,7 @@ class CheckpointManager:
             p = Path(self._file)
             p.parent.mkdir(parents=True, exist_ok=True)
             with open(p, 'w', encoding='utf-8') as f:
-                json.dump({'processed': list(self.processed)}, f)
+                json.dump({'processed': sorted(self.processed)}, f, indent=2)
         except Exception:
             pass
 

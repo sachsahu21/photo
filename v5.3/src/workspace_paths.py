@@ -20,6 +20,7 @@ DEFAULTS = {
     "comparisons": "comparisons",
     "thumbnails": "thumbnails",
     "logs": "logs",
+    "checkpoints": "checkpoints",
 }
 
 
@@ -126,12 +127,29 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     log_cfg["file"] = str(W / log_sub / log_name)
 
     proc = config.setdefault("processing", {})
-    ck_name = str(proc.get("checkpoint_file") or proc.get("checkpoint_filename") or "").strip()
-    if ck_name:
-        ck_name = Path(ck_name.replace("\\", "/")).name
+    checkpoint_sub = subdir_from_section(
+        proc, "checkpoint_subfolder", DEFAULTS["checkpoints"]
+    )
+    checkpoint_root = W / checkpoint_sub
+
+    scan_ck_name = str(
+        proc.get("scan_checkpoint_filename")
+        or proc.get("checkpoint_filename")
+        or proc.get("checkpoint_file")
+        or ""
+    ).strip()
+    if scan_ck_name:
+        scan_ck_name = Path(scan_ck_name.replace("\\", "/")).name
     else:
-        ck_name = CHECKPOINT_FILENAME
-    proc["checkpoint_file"] = str(W / ck_name)
-    proc["global_checkpoint_file"] = str(W / GLOBAL_CHECKPOINT_FILENAME)
+        scan_ck_name = CHECKPOINT_FILENAME
+
+    global_ck_name = str(proc.get("global_checkpoint_filename") or "").strip()
+    if global_ck_name:
+        global_ck_name = Path(global_ck_name.replace("\\", "/")).name
+    else:
+        global_ck_name = GLOBAL_CHECKPOINT_FILENAME
+
+    proc["checkpoint_file"] = str(checkpoint_root / scan_ck_name)
+    proc["global_checkpoint_file"] = str(checkpoint_root / global_ck_name)
 
     config.setdefault("workspace", {})["_resolved_root"] = str(W)
