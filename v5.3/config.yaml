@@ -16,6 +16,7 @@
 #   thumbnails/         preview JPEGs (when enabled)
 #   logs/               image-scanner.log
 #   checkpoints/        scan/global checkpoint JSON files
+#   quarantine/         moved delete/fresh-restart files + manifests
 #   records-backup.pkl
 #
 # Artifact subfolders: use "subfolder" keys only (names, not full paths).
@@ -118,7 +119,7 @@ metadata:
   # true = delete vault JSON when image missing everywhere (use with care)
   reconcile_remove_missing: true
   dedupe_on_reconcile: true
-  dedupe_before_excel: true
+  dedupe_before_excel: false
   dedupe_after_scan: true
   dedupe_prefer: organized
   # skip_if_present | update_missing | refresh | full_overwrite
@@ -127,7 +128,7 @@ metadata:
   tool_version: "v5.3"
 
 faces:
-  enabled: false
+  enabled: true
   data_subfolder: face_data
   index_db_filename: face_index.sqlite
   untagged_subfolder: untagged_people
@@ -258,6 +259,11 @@ cloud:
   bucket: ""
   prefix: ""
   credentials_path: ""
+
+quarantine:
+  subfolder: quarantine
+  preserve_relative_paths: true
+  manifest_prefix: quarantine-manifest
 
 streamlit:
   enabled: false

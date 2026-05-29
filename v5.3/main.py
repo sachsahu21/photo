@@ -5,11 +5,11 @@ os.environ["OPENCV_LOG_LEVEL"] = "FATAL"
 
 import csv
 import sys
-import shutil
 import logging
 import pickle
 from pathlib import Path
 from datetime import datetime
+from time import perf_counter
 
 from src.config_manager import ConfigManager
 from src.scanner import ImageScanner
@@ -22,7 +22,8 @@ from src.people_sync import sync_people_tags
 from src.metadata_reconcile import reconcile_vault_paths, auto_reconcile_if_enabled
 from src.vault_maintenance import (
     dedupe_vault,
-    delete_media_cascade,
+    quarantine_generated_targets,
+    quarantine_media_cascade,
     cleanup_untagged_orphans,
     save_last_excel_path,
     load_last_excel_path,
@@ -104,6 +105,23 @@ def _with_scan_defaults(records):
         r.setdefault('similar_score', '')
         r.setdefault('similar_methods', '')
     return records
+
+
+def _recompute_duplicate_metadata(config):
+    if not config.get('duplicates.enabled', True):
+        return []
+    md_store = MetadataStore(config.to_dict())
+    records = md_store.load_records(exclude_missing=False)
+    if not records:
+        return []
+    records = DuplicateHandler(
+        hash_algorithm=config.get('duplicates.hash_algorithm', 'md5'),
+        selection_criteria=config.get(
+            'duplicates.selection_criteria',
+            ['quality', 'resolution', 'date', 'size']
+        )
+    ).mark_duplicates(_with_scan_defaults(records))
+    return md_store.upsert_records(records)
 
 
 def _make_batch_writer(config):
@@ -250,6 +268,9 @@ def task_1(config, logger):
                 r['similar_methods'] = ''
         md_store = MetadataStore(config.to_dict())
         records = md_store.upsert_records(records)
+        if config.get('duplicates.enabled', True):
+            print('  Rechecking duplicates across full metadata vault...')
+            records = _recompute_duplicate_metadata(config)
         if config.get('metadata.dedupe_after_scan', True):
             dedupe_vault(config.to_dict(), quiet=True)
             records = MetadataStore(config.to_dict()).load_records()
@@ -401,10 +422,17 @@ def task_analyze_folders(config, logger):
 
 def task_1b(config, logger):
     print('\n  STEP 2: GENERATE EXCEL FROM METADATA')
+    total_start = perf_counter()
     cfg = config.to_dict()
     if config.get('metadata.dedupe_before_excel', True):
+        t = perf_counter()
         dedupe_vault(cfg, quiet=True)
+        print('  Timing: pre-Excel vault dedupe ' + str(round(perf_counter() - t, 2)) + 's')
+    else:
+        print('  Skipping metadata dedupe before Excel; run option 23 if needed.')
+    t = perf_counter()
     records = MetadataStore(cfg).load_records()
+    print('  Timing: metadata load ' + str(round(perf_counter() - t, 2)) + 's')
     if not records:
         records = load_bk(config)
     if not records:
@@ -421,13 +449,17 @@ def task_1b(config, logger):
             r['delete_flag'] = 'No'
     ad = None
     try:
+        t = perf_counter()
         from src.analytics import StorageAnalytics
         ad = StorageAnalytics().analyze(records)
+        print('  Timing: analytics ' + str(round(perf_counter() - t, 2)) + 's')
     except Exception:
         pass
+    t = perf_counter()
     ep = ExcelWriter(cfg).write(
         records, config.get('scan.folder_path'), analytics_data=ad
     )
+    print('  Timing: Excel write ' + str(round(perf_counter() - t, 2)) + 's')
     if ep:
         save_last_excel_path(config, ep)
         print('  Excel: ' + str(ep))
@@ -440,6 +472,7 @@ def task_1b(config, logger):
                     print('  Comparisons: ' + str(out))
             except Exception as e:
                 print('  Comparison skipped: ' + str(e))
+    print('  Timing: option 31 total ' + str(round(perf_counter() - total_start, 2)) + 's')
     return ep
 
 
@@ -472,7 +505,7 @@ def _path_under(path, root):
         return False
 
 
-def _generated_delete_target(path, workspace_root, protected_roots):
+def _generated_quarantine_target(path, workspace_root, protected_roots):
     p = Path(path).expanduser()
     if not p:
         return None
@@ -510,17 +543,17 @@ def task_fresh_restart_metadata(config, logger):
 
         safe_targets = []
         for label, raw in targets:
-            target = _generated_delete_target(raw, workspace_root, protected_roots)
+            target = _generated_quarantine_target(raw, workspace_root, protected_roots)
             if target:
                 safe_targets.append((label, target))
             else:
                 print('  Skipped unsafe target: ' + label + ' -> ' + str(raw))
 
         if not safe_targets:
-            print('  Nothing safe to delete.')
+            print('  Nothing safe to quarantine.')
             return
 
-        print('  This deletes generated metadata state only:')
+        print('  This moves generated metadata state to quarantine:')
         for label, target in safe_targets:
             print('  - ' + label + ': ' + str(target))
         print('  Photos are not deleted from scan or organized folders.')
@@ -528,24 +561,21 @@ def task_fresh_restart_metadata(config, logger):
             print('  Cancelled')
             return
 
-        removed = 0
-        for label, target in safe_targets:
-            try:
-                if target.is_dir():
-                    shutil.rmtree(target)
-                    removed += 1
-                elif target.is_file():
-                    target.unlink()
-                    removed += 1
-            except Exception as e:
-                logger.error('Fresh restart delete %s: %s', target, e, exc_info=True)
-                print('  Could not delete ' + label + ': ' + str(e))
+        stats = quarantine_generated_targets(
+            config.to_dict(),
+            safe_targets,
+            action='fresh-restart',
+            manifest_prefix='fresh-restart-manifest',
+        )
 
         Path(config.get('metadata.root_folder')).mkdir(parents=True, exist_ok=True)
         if checkpoint_file:
             Path(checkpoint_file).parent.mkdir(parents=True, exist_ok=True)
-        print('  Removed generated target(s): ' + str(removed))
-        print('  Fresh metadata restart is ready.')
+        print('  Quarantined generated target(s): ' + str(stats.get('moved', 0)))
+        print('  Quarantine folder: ' + str(stats.get('run_root', '')))
+        print('  Manifest: ' + str(stats.get('manifest_path', '')))
+        print('  Starting fresh scan...')
+        return task_1(config, logger)
     except Exception as e:
         logger.error('Fresh restart metadata: %s', e, exc_info=True)
         print('  Error: ' + str(e))
@@ -654,13 +684,27 @@ def task_cleanup_untagged(config, logger):
 
 
 def task_2(ep, config, logger):
-    print('\n  STEP 3: APPLY EXCEL DELETE ACTIONS')
+    print('\n  STEP 3: APPLY EXCEL DELETE ACTIONS (QUARANTINE)')
     try:
         import openpyxl
         wb = openpyxl.load_workbook(ep)
+        print('  Select sheet actions to apply:')
+        print('  1. Duplicates sheet (default)')
+        print('  2. Similar Images sheet')
+        print('  3. All Images sheet')
+        print('  4. All available sheets')
+        sheet_choice = input('  Choice (Enter=1): ').strip() or '1'
+        sheet_map = {
+            '1': ['Duplicates'],
+            '2': ['Similar Images'],
+            '3': ['All Images'],
+            '4': ['Duplicates', 'Similar Images', 'All Images'],
+        }
+        sheet_names = sheet_map.get(sheet_choice, ['Duplicates'])
         targets = []
-        for sn in ['All Images', 'Duplicates', 'Similar Images']:
+        for sn in sheet_names:
             if sn not in wb.sheetnames:
+                print('  Sheet not found, skipped: ' + sn)
                 continue
             ws = wb[sn]
             hdr = {str(c.value).strip().lower(): ci for ci, c in enumerate(ws[1], 1) if c.value}
@@ -668,59 +712,63 @@ def task_2(ep, config, logger):
             if not fci:
                 continue
             dci = None
-            sci = None
-            dupi = None
             mci = hdr.get('metadata json path')
             midci = hdr.get('media id')
+            md5ci = hdr.get('md5 hash')
+            groupci = hdr.get('dup group') or hdr.get('group') or hdr.get('duplicate group')
             for h, ci in hdr.items():
                 if 'delete' in h:
                     dci = ci
-                if h == 'similar?' or 'similar?' in h:
-                    sci = ci
-                if h == 'duplicate?' or 'dup?' in h:
-                    dupi = ci
+            if not dci:
+                print('  No DELETE? column, skipped: ' + sn)
+                continue
             for ri in range(2, ws.max_row + 1):
                 fp = ws.cell(row=ri, column=fci).value
                 if not fp:
                     continue
                 delete_flag = ws.cell(row=ri, column=dci).value if dci else ''
-                similar_flag = ws.cell(row=ri, column=sci).value if sci else ''
-                dup_flag = ws.cell(row=ri, column=dupi).value if dupi else ''
-                delete_me = any(
-                    str(v).strip().lower() in ('yes', 'true', '1')
-                    for v in [delete_flag, similar_flag, dup_flag]
-                )
+                delete_me = str(delete_flag).strip().lower() in ('yes', 'true', '1')
                 if not delete_me:
                     continue
                 mp = ws.cell(row=ri, column=mci).value if mci else ''
                 mid = ws.cell(row=ri, column=midci).value if midci else ''
+                md5 = ws.cell(row=ri, column=md5ci).value if md5ci else ''
+                group = ws.cell(row=ri, column=groupci).value if groupci else ''
                 targets.append({
                     'full_path': str(fp),
                     'metadata_json_path': str(mp or '').strip(),
                     'media_id': str(mid or '').strip(),
+                    'md5_hash': str(md5 or '').strip(),
+                    'duplicate_group': str(group or '').strip(),
+                    'sheet': sn,
                 })
 
         if not targets:
-            print('  Nothing to delete')
+            print('  Nothing marked for quarantine')
             return
         uniq = {}
         for t in targets:
             uniq[t['full_path']] = t
         print('  ' + str(len(uniq)) + ' files marked')
-        if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
+        print('  Files will be moved to quarantine, not permanently deleted.')
+        if input('  Confirm quarantine? (yes/no): ').strip().lower() != 'yes':
             return
-        stats = delete_media_cascade(config.to_dict(), list(uniq.values()), delete_files=True)
+        stats = quarantine_media_cascade(config.to_dict(), list(uniq.values()))
         print(
-            '  Images deleted: ' + str(stats['files_deleted'])
+            '  Images moved: ' + str(stats['files_moved'])
             + ' | missing: ' + str(stats['files_missing'])
         )
         print(
-            '  Metadata deleted: ' + str(stats['json_deleted'])
-            + ' | untagged dirs: ' + str(stats['untagged_removed'])
+            '  Metadata moved: ' + str(stats['json_moved'])
+            + ' | missing metadata: ' + str(stats['json_missing'])
             + ' | face index rows: ' + str(stats['face_rows_removed'])
         )
+        print('  Quarantine folder: ' + str(stats.get('quarantine_root', '')))
+        print('  Manifest: ' + str(stats.get('manifest_path', '')))
+        print('  Rechecking duplicates across remaining metadata...')
+        _recompute_duplicate_metadata(config)
         dedupe_vault(config.to_dict(), quiet=True)
-        auto_reconcile_if_enabled(config.to_dict(), 'after delete')
+        auto_reconcile_if_enabled(config.to_dict(), 'after quarantine')
         records = MetadataStore(config.to_dict()).load_records()
         if records:
             save_bk(records, config)
@@ -990,7 +1038,7 @@ def main():
 
             print('\n  --- 3. EXCEL & DATA ---')
             print('  31. Generate/Refresh Excel')
-            print('  32. Apply Excel delete actions')
+            print('  32. Apply Excel delete actions (quarantine)')
             
             print('\n  --- 4. LIBRARY ORGANIZATION ---')
             print('  41. Organize library from Excel')

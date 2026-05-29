@@ -21,6 +21,7 @@ DEFAULTS = {
     "thumbnails": "thumbnails",
     "logs": "logs",
     "checkpoints": "checkpoints",
+    "quarantine": "quarantine",
 }
 
 
@@ -104,9 +105,22 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     )
     faces["data_folder"] = str(W / data_sub)
 
-
     seed_sub = subdir_from_section(faces, "seed_root", "seed")
     faces["seed_root"] = str(W / seed_sub) if not is_absolute_path(seed_sub) else seed_sub
+
+    db_name = str(faces.get("index_db_filename") or "face_index.sqlite").strip()
+    if not db_name:
+        db_name = "face_index.sqlite"
+    faces["index_db"] = str(W / Path(db_name).name)
+
+    untagged_sub = subdir_from_section(
+        faces, "untagged_root", DEFAULTS["untagged_people"], alt_keys=("untagged_subfolder",)
+    )
+    untagged_value = str(faces.get("untagged_root") or "").strip()
+    if untagged_value and is_absolute_path(untagged_value):
+        faces["untagged_root"] = untagged_value
+    else:
+        faces["untagged_root"] = str(W / untagged_sub)
 
     out = config.setdefault("output", {})
     out_sub = subdir_from_section(out, "output_folder", DEFAULTS["reports"])
@@ -151,5 +165,13 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
 
     proc["checkpoint_file"] = str(checkpoint_root / scan_ck_name)
     proc["global_checkpoint_file"] = str(checkpoint_root / global_ck_name)
+
+    quarantine = config.setdefault("quarantine", {})
+    quarantine_sub = subdir_from_section(
+        quarantine, "root_folder", DEFAULTS["quarantine"]
+    )
+    quarantine["root_folder"] = str(W / quarantine_sub)
+    quarantine.setdefault("preserve_relative_paths", True)
+    quarantine.setdefault("manifest_prefix", "quarantine-manifest")
 
     config.setdefault("workspace", {})["_resolved_root"] = str(W)

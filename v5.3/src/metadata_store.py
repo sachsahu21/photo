@@ -445,7 +445,7 @@ class MetadataStore:
             {
                 "is_duplicate": _truthy(rec.get("is_duplicate")),
                 "duplicate_group": rec.get("duplicate_group") or None,
-                "duplicate_type": rec.get("duplicate_type"),
+                "duplicate_type": rec.get("duplicate_type") or ("exact_md5" if _truthy(rec.get("is_duplicate")) else None),
                 "master_media_id": rec.get("master_media_id"),
                 "duplicate_confidence": rec.get("duplicate_confidence"),
                 "is_best_in_group": rec.get("is_best_in_group"),
@@ -681,7 +681,7 @@ class MetadataStore:
             "face_boxes": face_items,
             "is_duplicate": _yes_no(_coalesce(dup.get("is_duplicate"), k.get("is_duplicate"), rec.get("is_duplicate"), "No")),
             "duplicate_group": dup.get("duplicate_group") or rec.get("duplicate_group", ""),
-            "duplicate_type": dup.get("duplicate_type"),
+            "duplicate_type": dup.get("duplicate_type") or ("exact_md5" if _truthy(dup.get("is_duplicate")) else rec.get("duplicate_type")),
             "master_media_id": dup.get("master_media_id"),
             "duplicate_confidence": dup.get("duplicate_confidence"),
             "is_best_in_group": dup.get("is_best_in_group") or rec.get("is_best_in_group", ""),

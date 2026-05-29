@@ -2,6 +2,7 @@
 import csv
 from pathlib import Path
 from typing import Set
+from datetime import datetime
 
 from src.config_manager import ConfigManager
 
@@ -60,11 +61,12 @@ def main():
     pending_size_bytes = sum(Path(p).stat().st_size for p in pending if Path(p).exists())
     pending_size_human = human_readable_size(pending_size_bytes)
 
-    reports_dir = Path(cfg.get('output', {}).get('output_folder') or workspace_root / "reports")
+    reports_dir = workspace_root / "folder_analysis"
     reports_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Write CSV (original behaviour)
-    csv_path = reports_dir / "scanned_pending_report.csv"
+    csv_path = reports_dir / ("scanned_pending_report_" + ts + ".csv")
     with csv_path.open('w', newline='', encoding='utf-8') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["status", "full_path"])
@@ -74,7 +76,7 @@ def main():
             writer.writerow(["pending", f])
 
     # Write detailed XLSX
-    xlsx_path = reports_dir / "scanned_pending_report.xlsx"
+    xlsx_path = reports_dir / ("scanned_pending_report_" + ts + ".xlsx")
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"

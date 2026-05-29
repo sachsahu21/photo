@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from collections import Counter
+from time import perf_counter
 
 try:
     import openpyxl
@@ -79,10 +80,6 @@ class ExcelWriter:
         ('video_bitrate_kbps', 'Bitrate (kbps)', 14),
         ('video_meta_source', 'Video Meta Src', 14),
         ('video_meta_error', 'Video Meta Err', 18),
-        ('is_duplicate', 'Duplicate?', 12),
-        ('duplicate_group', 'Dup Group', 12),
-        ('is_best_in_group', 'Best?', 8),
-        ('recommendation', 'Recommendation', 20),
         ('delete_flag', 'DELETE? (Yes/No)', 16),
         ('md5_hash', 'MD5 Hash', 36),
         ('file_modified', 'File Modified', 20),
@@ -186,29 +183,33 @@ class ExcelWriter:
             wb.remove(wb.active)
 
         try:
+            timings = []
+            def build_sheet(label, fn):
+                t = perf_counter()
+                fn()
+                timings.append((label, perf_counter() - t))
+
             if self.do_sum:
-                self._summary(wb, records, scan_folder)
-                wb.save(op)
+                build_sheet('Summary', lambda: self._summary(wb, records, scan_folder))
             if self.do_all:
-                self._all(wb, records)
-                wb.save(op)
+                build_sheet('All Images', lambda: self._all(wb, records))
             if self.do_blur:
-                self._blurry(wb, records)
-                wb.save(op)
+                build_sheet('Blurry Images', lambda: self._blurry(wb, records))
             if self.do_dup:
-                self._dups(wb, records)
-                wb.save(op)
+                build_sheet('Duplicates', lambda: self._dups(wb, records))
             if self.do_qual:
-                self._quality(wb, records)
-                wb.save(op)
+                build_sheet('Quality Report', lambda: self._quality(wb, records))
             if self.do_analytics and analytics_data:
-                self._analytics_sheet(wb, analytics_data)
-                wb.save(op)
+                build_sheet('Analytics', lambda: self._analytics_sheet(wb, analytics_data))
             if self.do_clusters:
                 clustered = [r for r in records if r.get('cluster_label')]
                 if clustered:
-                    self._clusters_sheet(wb, records)
-                    wb.save(op)
+                    build_sheet('Clusters', lambda: self._clusters_sheet(wb, records))
+            t = perf_counter()
+            wb.save(op)
+            timings.append(('Final save', perf_counter() - t))
+            for label, elapsed in timings:
+                print('  Timing: sheet ' + label + ' ' + str(round(elapsed, 2)) + 's')
             return str(op)
         except Exception as e:
             logger.error("Excel error: %s", e, exc_info=True)
@@ -269,8 +270,6 @@ class ExcelWriter:
                   else af if ri % 2 == 0 else None)
             for ci, (k, _, _) in enumerate(self.ALL_COLS, 1):
                 c = ws.cell(row=ri, column=ci, value=self._sv(rec.get(k, '')))
-                c.border = self._brd()
-                c.alignment = Alignment(vertical='center')
                 if fl:
                     c.fill = fl
 
@@ -293,8 +292,6 @@ class ExcelWriter:
         for ri, rec in enumerate(bl, 2):
             for ci, (k, _, _) in enumerate(self.BLUR_COLS, 1):
                 c = ws.cell(row=ri, column=ci, value=self._sv(rec.get(k, '')))
-                c.border = self._brd()
-                c.alignment = Alignment(vertical='center')
                 c.fill = fl
         if bl:
             ws.auto_filter.ref = f"A1:{get_column_letter(len(self.BLUR_COLS))}{len(bl) + 1}"
@@ -329,8 +326,6 @@ class ExcelWriter:
             ib = str(rec.get('is_best_in_group', '')).lower() == 'yes'
             for ci, (k, _, _) in enumerate(self.DUP_COLS, 1):
                 c = ws.cell(row=ri, column=ci, value=self._sv(rec.get(k, '')))
-                c.border = self._brd()
-                c.alignment = Alignment(vertical='center')
                 c.fill = fl
                 c.font = bfont if ib else nfont
         if dups:

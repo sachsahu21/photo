@@ -123,7 +123,7 @@ class ConfigManager:
                 'auto_reconcile_paths': True,
                 'reconcile_remove_missing': False,
                 'dedupe_on_reconcile': True,
-                'dedupe_before_excel': True,
+                'dedupe_before_excel': False,
                 'dedupe_after_scan': True,
                 'dedupe_prefer': 'organized',
                 'update_strategy': 'update_missing',
@@ -195,6 +195,11 @@ class ConfigManager:
             'comparison': {'enabled': True, 'subfolder': 'comparisons', 'generate_after_excel': False},
             'analytics': {'enabled': True},
             'cloud': {'enabled': False, 'provider': 'none'},
+            'quarantine': {
+                'subfolder': 'quarantine',
+                'preserve_relative_paths': True,
+                'manifest_prefix': 'quarantine-manifest',
+            },
             'streamlit': {'enabled': True, 'port': 8501},
             'logging': {
                 'level': 'INFO',
@@ -239,6 +244,7 @@ class ConfigManager:
             'reports': self.get('output.output_folder', ''),
             'comparisons': self.get('comparison.output_folder', ''),
             'thumbnails': self.get('thumbnails.output_folder', ''),
+            'quarantine': self.get('quarantine.root_folder', ''),
             'log': self.get('logging.file', ''),
             'checkpoint': self.get('processing.checkpoint_file', ''),
             'backup': str(self.workspace_root() / 'records-backup.pkl'),
