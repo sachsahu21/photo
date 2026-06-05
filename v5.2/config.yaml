@@ -15,7 +15,8 @@
 #   comparisons/        duplicate/similar HTML reports
 #   thumbnails/         preview JPEGs (when enabled)
 #   logs/               image-scanner.log
-#   .scan_checkpoint.json
+#   checkpoints/        scan/global checkpoint JSON files
+#   quarantine/         moved delete/fresh-restart files + manifests
 #   records-backup.pkl
 #
 # Artifact subfolders: use "subfolder" keys only (names, not full paths).
@@ -23,13 +24,13 @@
 
 workspace:
   # REQUIRED absolute path — parent folder for all artifacts above.
-  root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\artifacts"
+  root: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\artifacts"
 
 # --- Photo libraries (NOT under workspace; you choose these paths) -----------
 
 scan:
   # REQUIRED. Source folder to scan for images/videos.
-  # folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic"
+  folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic"
   # folder_path: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\pic\\Sachin\\sach_unorganized\\test2"
   # true = include subfolders; false = top level only
   recursive: true
@@ -76,7 +77,7 @@ organization:
   # Organized photo library output (copy/move from scan source).
   output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
   # flat | year | year-month-date
-  folder_structure: "flat"
+  folder_structure: "year"
   # copy = keep originals; move = relocate into organized tree
   operation: "copy"
   retire_scan_path_json_on_organize: true
@@ -118,16 +119,16 @@ metadata:
   # true = delete vault JSON when image missing everywhere (use with care)
   reconcile_remove_missing: true
   dedupe_on_reconcile: true
-  dedupe_before_excel: true
+  dedupe_before_excel: false
   dedupe_after_scan: true
   dedupe_prefer: organized
   # skip_if_present | update_missing | refresh | full_overwrite
   update_strategy: "update_missing"
-  schema_version: "1.0"
-  tool_version: "v5.2"
+  schema_version: "2.0"
+  tool_version: "v5.3"
 
 faces:
-  enabled: false
+  enabled: true
   data_subfolder: face_data
   index_db_filename: face_index.sqlite
   untagged_subfolder: untagged_people
@@ -177,6 +178,10 @@ processing:
   verbose: false
   checkpoint_enabled: true
   checkpoint_interval: 100
+  checkpoint_subfolder: checkpoints
+  scan_checkpoint_filename: .scan_checkpoint.json
+  global_checkpoint_filename: global_checkpoint.json
+  metadata_flush_interval: 100
   fast_mode: false
   skip_video_hash: false
 
@@ -254,6 +259,11 @@ cloud:
   bucket: ""
   prefix: ""
   credentials_path: ""
+
+quarantine:
+  subfolder: quarantine
+  preserve_relative_paths: true
+  manifest_prefix: quarantine-manifest
 
 streamlit:
   enabled: false

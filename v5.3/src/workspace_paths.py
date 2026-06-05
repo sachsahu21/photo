@@ -111,7 +111,7 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     db_name = str(faces.get("index_db_filename") or "face_index.sqlite").strip()
     if not db_name:
         db_name = "face_index.sqlite"
-    faces["index_db"] = str(W / Path(db_name).name)
+    faces["index_db"] = str(Path(faces["data_folder"]) / Path(db_name).name)
 
     untagged_sub = subdir_from_section(
         faces, "untagged_root", DEFAULTS["untagged_people"], alt_keys=("untagged_subfolder",)
@@ -120,7 +120,7 @@ def apply_workspace_artifacts(config: Dict[str, Any]) -> None:
     if untagged_value and is_absolute_path(untagged_value):
         faces["untagged_root"] = untagged_value
     else:
-        faces["untagged_root"] = str(W / untagged_sub)
+        faces["untagged_root"] = str(Path(faces["data_folder"]) / untagged_sub)
 
     out = config.setdefault("output", {})
     out_sub = subdir_from_section(out, "output_folder", DEFAULTS["reports"])

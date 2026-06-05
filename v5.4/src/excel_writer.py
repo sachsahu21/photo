@@ -162,6 +162,7 @@ class ExcelWriter:
         self.do_qual = sh.get('quality_report', True)
         self.do_analytics = sh.get('analytics', True)
         self.do_clusters = sh.get('clusters', True)
+        self.do_scan_progress = sh.get('scan_progress', True)
         self.config = config
 
     def write(self, records, scan_folder, analytics_data=None):
@@ -205,6 +206,9 @@ class ExcelWriter:
                 clustered = [r for r in records if r.get('cluster_label')]
                 if clustered:
                     build_sheet('Clusters', lambda: self._clusters_sheet(wb, records))
+            if self.do_scan_progress:
+                sf = scan_folder
+                build_sheet('Scan Progress', lambda: self._scan_progress(wb, sf))
             t = perf_counter()
             wb.save(op)
             timings.append(('Final save', perf_counter() - t))
@@ -481,6 +485,173 @@ class ExcelWriter:
                 c = ws.cell(row=ri, column=ci, value=self._sv(rec.get(k, '')))
                 c.border = self._brd()
                 c.fill = fl
+
+    def _scan_progress(self, wb, scan_folder):
+        """Add 4 sheets showing scan progress: Scan Summary, By Directory, Pending Files, Scanned Files."""
+        import json
+
+        cfg = self.config
+        scan_cfg = cfg.get('scan', {})
+        sp = Path(scan_folder)
+        recursive = bool(scan_cfg.get('recursive', True))
+        extensions = scan_cfg.get('extensions', {})
+        ext_set = {f".{e.lower()}" for cat in extensions.values() for e in cat}
+
+        try:
+            if recursive:
+                all_files = {str(p) for p in sp.rglob("*") if p.is_file() and p.suffix.lower() in ext_set}
+            else:
+                all_files = {str(p) for p in sp.iterdir() if p.is_file() and p.suffix.lower() in ext_set}
+        except Exception as exc:
+            logger.warning("Scan progress sheets skipped — could not enumerate files: %s", exc)
+            return
+
+        workspace = cfg.get('workspace', {})
+        workspace_root = Path(workspace.get('_resolved_root') or workspace.get('root', '.'))
+        ck_path = Path(
+            cfg.get('processing', {}).get('global_checkpoint_file')
+            or workspace_root / "global_checkpoint.json"
+        )
+        processed: set = set()
+        if ck_path.is_file():
+            try:
+                data = json.loads(ck_path.read_text(encoding='utf-8'))
+                processed = set(data.get('processed', []))
+            except Exception:
+                pass
+
+        scanned = all_files & processed
+        pending = all_files - processed
+
+        def _sz(fp):
+            try:
+                return Path(fp).stat().st_size
+            except Exception:
+                return 0
+
+        def _hr(nb):
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if nb < 1024:
+                    return f"{nb:.1f} {unit}"
+                nb /= 1024
+            return f"{nb:.1f} PB"
+
+        # Single pass: build dir_stats and cache pending file sizes (avoids double stat())
+        dir_stats: dict = {}
+        pending_size_cache: dict = {}
+        for f in all_files:
+            d = str(Path(f).parent)
+            if d not in dir_stats:
+                dir_stats[d] = {'total': 0, 'scanned': 0, 'pending': 0, 'pb': 0}
+            dir_stats[d]['total'] += 1
+            if f in scanned:
+                dir_stats[d]['scanned'] += 1
+            else:
+                sz = _sz(f)
+                dir_stats[d]['pending'] += 1
+                dir_stats[d]['pb'] += sz
+                pending_size_cache[f] = sz
+
+        total = len(all_files)
+        n_scanned = len(scanned)
+        n_pending = len(pending)
+        pending_bytes = sum(pending_size_cache.values())
+        pct = round(n_scanned / total * 100, 1) if total else 0.0
+
+        # --- Scan Summary sheet ---
+        ws1 = wb.create_sheet('Scan Summary')
+        ws1.column_dimensions['A'].width = 35
+        ws1.column_dimensions['B'].width = 50
+        ws1['A1'] = 'Scan Progress Summary'
+        ws1['A1'].font = Font(bold=True, size=16, color=self.C_HDR)
+        ws1['A2'] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        ws1['A2'].font = Font(italic=True, color='888888')
+        ws1['A3'] = f"Scan folder: {scan_folder}"
+        ws1['A3'].font = Font(italic=True, color='888888')
+
+        hf = PatternFill('solid', fgColor=self.C_SEC)
+        acf = PatternFill('solid', fgColor=self.C_ACC)
+        secs = {'PROGRESS', 'FILE SIZES', 'DIRECTORIES'}
+        rows = [
+            ('', ''),
+            ('PROGRESS', ''),
+            ('Total Files', total),
+            ('Scanned', n_scanned),
+            ('Pending', n_pending),
+            ('Completion', f"{pct}%"),
+            ('', ''),
+            ('FILE SIZES', ''),
+            ('Pending Size', _hr(pending_bytes)),
+            ('', ''),
+            ('DIRECTORIES', ''),
+            ('Total Directories', len(dir_stats)),
+            ('Fully Scanned', len([d for d, s in dir_stats.items() if s['pending'] == 0])),
+            ('With Pending Files', len([d for d, s in dir_stats.items() if s['pending'] > 0])),
+        ]
+        for ri, (lbl, val) in enumerate(rows, 5):
+            a = ws1.cell(row=ri, column=1, value=lbl)
+            b = ws1.cell(row=ri, column=2, value=val)
+            if lbl in secs:
+                for x in (a, b):
+                    x.font = Font(bold=True, color=self.C_WF, size=11)
+                    x.fill = hf
+                    x.border = self._brd()
+            elif lbl:
+                a.font = Font(bold=True, size=11)
+                if ri % 2 == 0:
+                    a.fill = acf
+                    b.fill = acf
+
+        # --- By Directory sheet ---
+        ws2 = wb.create_sheet('By Directory')
+        ws2.freeze_panes = 'A2'
+        ws2.row_dimensions[1].height = 30
+        for ci, h in enumerate(['Directory', 'Total', 'Scanned', 'Pending', 'Pending Size', '% Done'], 1):
+            self._hdr(ws2.cell(row=1, column=ci, value=h))
+        ws2.column_dimensions['A'].width = 80
+        for col in ['B', 'C', 'D', 'E', 'F']:
+            ws2.column_dimensions[col].width = 16
+
+        done_fill = PatternFill('solid', fgColor='C6EFCE')   # green — fully scanned
+        part_fill = PatternFill('solid', fgColor='FFEB9C')   # yellow — has pending
+        for ri, (d, stats) in enumerate(sorted(dir_stats.items()), 2):
+            dp = round(stats['scanned'] / stats['total'] * 100, 1) if stats['total'] else 0
+            ws2.append([d, stats['total'], stats['scanned'], stats['pending'], _hr(stats['pb']), f"{dp}%"])
+            fl = done_fill if stats['pending'] == 0 else part_fill
+            for ci in range(1, 7):
+                ws2.cell(row=ri, column=ci).fill = fl
+        ws2.auto_filter.ref = f"A1:F{len(dir_stats) + 1}"
+
+        # --- Pending Files sheet ---
+        ws3 = wb.create_sheet('Pending Files')
+        ws3.freeze_panes = 'A2'
+        ws3.row_dimensions[1].height = 30
+        for ci, h in enumerate(['Directory', 'Filename', 'Full Path', 'Size (Bytes)', 'Size'], 1):
+            self._hdr(ws3.cell(row=1, column=ci, value=h), bg='843C0C')
+        ws3.column_dimensions['A'].width = 60
+        ws3.column_dimensions['B'].width = 40
+        ws3.column_dimensions['C'].width = 80
+        ws3.column_dimensions['D'].width = 14
+        ws3.column_dimensions['E'].width = 14
+        for f in sorted(pending):
+            p = Path(f)
+            sz = pending_size_cache.get(f, 0)
+            ws3.append([str(p.parent), p.name, f, sz, _hr(sz)])
+        ws3.auto_filter.ref = f"A1:E{n_pending + 1}"
+
+        # --- Scanned Files sheet ---
+        ws4 = wb.create_sheet('Scanned Files')
+        ws4.freeze_panes = 'A2'
+        ws4.row_dimensions[1].height = 30
+        for ci, h in enumerate(['Directory', 'Filename', 'Full Path'], 1):
+            self._hdr(ws4.cell(row=1, column=ci, value=h), bg='375623')
+        ws4.column_dimensions['A'].width = 60
+        ws4.column_dimensions['B'].width = 40
+        ws4.column_dimensions['C'].width = 80
+        for f in sorted(scanned):
+            p = Path(f)
+            ws4.append([str(p.parent), p.name, f])
+        ws4.auto_filter.ref = f"A1:C{n_scanned + 1}"
 
     def _csv_fb(self, records):
         try:

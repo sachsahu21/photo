@@ -3,10 +3,13 @@
 import os
 os.environ["OPENCV_LOG_LEVEL"] = "FATAL"
 
+import csv
 import sys
 import logging
 import pickle
 from pathlib import Path
+from datetime import datetime
+from time import perf_counter
 
 from src.config_manager import ConfigManager
 from src.scanner import ImageScanner
@@ -19,7 +22,8 @@ from src.people_sync import sync_people_tags
 from src.metadata_reconcile import reconcile_vault_paths, auto_reconcile_if_enabled
 from src.vault_maintenance import (
     dedupe_vault,
-    delete_media_cascade,
+    quarantine_generated_targets,
+    quarantine_media_cascade,
     cleanup_untagged_orphans,
     save_last_excel_path,
     load_last_excel_path,
@@ -72,6 +76,151 @@ def load_bk(config):
         return None
 
 
+def _norm_path(value):
+    try:
+        return str(Path(str(value)).expanduser().resolve()).lower()
+    except Exception:
+        return str(value or '').strip().lower()
+
+
+def _record_path_set(records):
+    paths = set()
+    for rec in records or []:
+        fp = rec.get('full_path') or rec.get('file_path')
+        if fp:
+            paths.add(_norm_path(fp))
+    return paths
+
+
+def _with_scan_defaults(records):
+    for r in records or []:
+        if not r.get('delete_flag'):
+            r['delete_flag'] = 'No'
+        r.setdefault('is_duplicate', 'No')
+        r.setdefault('duplicate_group', '')
+        r.setdefault('is_best_in_group', '')
+        r.setdefault('recommendation', '')
+        r.setdefault('is_similar', 'No')
+        r.setdefault('similar_group', '')
+        r.setdefault('similar_score', '')
+        r.setdefault('similar_methods', '')
+    return records
+
+
+def _recompute_duplicate_metadata(config):
+    if not config.get('duplicates.enabled', True):
+        return []
+    md_store = MetadataStore(config.to_dict())
+    records = md_store.load_records(exclude_missing=False)
+    if not records:
+        return []
+    records = DuplicateHandler(
+        hash_algorithm=config.get('duplicates.hash_algorithm', 'md5'),
+        selection_criteria=config.get(
+            'duplicates.selection_criteria',
+            ['quality', 'resolution', 'date', 'size']
+        )
+    ).mark_duplicates(_with_scan_defaults(records))
+    return md_store.upsert_records(records)
+
+
+def _make_batch_writer(config):
+    try:
+        interval = int(config.get('processing.metadata_flush_interval', 100) or 100)
+    except (TypeError, ValueError):
+        interval = 100
+    interval = max(1, interval)
+    cfg = config.to_dict()
+    md_store = MetadataStore(cfg)
+    pending = []
+    count = 0
+
+    def flush(force=False):
+        nonlocal pending
+        if not pending:
+            return
+        if not force and len(pending) < interval:
+            return
+        batch = _with_scan_defaults(list(pending))
+        md_store.upsert_records(batch)
+        try:
+            md_store.rebuild_index()
+        except Exception:
+            pass
+        print('  Metadata batch saved: ' + str(len(batch)) + ' records')
+        pending = []
+
+    def on_record(rec):
+        nonlocal count
+        pending.append(rec)
+        count += 1
+        if count % interval == 0:
+            flush(force=True)
+
+    return on_record, lambda: flush(force=True)
+
+
+def _export_missing_metadata_report(config, missing_paths):
+    reports = Path(config.get('output.output_folder') or Path(config.get('workspace.root')) / 'reports')
+    reports.mkdir(parents=True, exist_ok=True)
+    out = reports / ('missing-metadata-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '.csv')
+    with open(out, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['full_path'])
+        for p in sorted(missing_paths):
+            writer.writerow([p])
+    print('  Missing metadata report: ' + str(out))
+    return out
+
+
+def _missing_metadata_paths(records, config):
+    expected = {}
+    for rec in records or []:
+        fp = rec.get('full_path') or rec.get('file_path')
+        if fp:
+            expected[_norm_path(fp)] = str(fp)
+    if not expected:
+        return []
+    stored = _record_path_set(MetadataStore(config.to_dict()).load_records())
+    return [original for key, original in expected.items() if key not in stored]
+
+
+def _handle_missing_metadata(missing_paths, config, logger):
+    if not missing_paths:
+        print('  Metadata verification: all scanned files have metadata JSON')
+        return
+    print('  Metadata verification: ' + str(len(missing_paths)) + ' file(s) missing metadata JSON')
+    while True:
+        print('  1. Rescan missing files only')
+        print('  2. Export missing metadata report')
+        print('  3. Ignore for now')
+        ch = input('  Choice (1/2/3): ').strip()
+        if ch == '1':
+            try:
+                scanner = ImageScanner(config.to_dict())
+                on_record, flush = _make_batch_writer(config)
+                repaired = scanner.scan_files(missing_paths, batch_callback=on_record)
+                flush()
+                if repaired:
+                    MetadataStore(config.to_dict()).upsert_records(_with_scan_defaults(repaired))
+                    MetadataStore(config.to_dict()).rebuild_index()
+                print('  Repaired metadata files: ' + str(len(repaired)))
+            except Exception as e:
+                logger.error('Missing metadata repair: %s', e, exc_info=True)
+                print('  Repair error: ' + str(e))
+            return
+        if ch == '2':
+            try:
+                _export_missing_metadata_report(config, missing_paths)
+            except Exception as e:
+                print('  Report error: ' + str(e))
+            return
+        if ch == '3' or ch == '':
+            print('  Ignored for now')
+            return
+        print('  Invalid choice')
+
+
 def task_1(config, logger):
     print('\n  STEP 1: GENERATE / REFRESH METADATA')
     print('  ' + '=' * 50)
@@ -80,14 +229,15 @@ def task_1(config, logger):
         scanner = ImageScanner(config.to_dict())
         sf = config.get('scan.folder_path')
         print('  Scanning: ' + str(sf))
-        records = scanner.scan(sf)
+        on_record, flush_batches = _make_batch_writer(config)
+        records = scanner.scan(sf, batch_callback=on_record)
+        flush_batches()
         if not records:
             print('  No files!')
             return None
         print('  Found ' + str(len(records)) + ' files')
-        for r in records:
-            if not r.get('delete_flag'):
-                r['delete_flag'] = 'No'
+        records = _with_scan_defaults(records)
+        scanned_records = list(records)
         if config.get('duplicates.enabled', True):
             print('  Detecting duplicates...')
             records = DuplicateHandler(
@@ -118,11 +268,16 @@ def task_1(config, logger):
                 r['similar_methods'] = ''
         md_store = MetadataStore(config.to_dict())
         records = md_store.upsert_records(records)
+        if config.get('duplicates.enabled', True):
+            print('  Rechecking duplicates across full metadata vault...')
+            records = _recompute_duplicate_metadata(config)
         if config.get('metadata.dedupe_after_scan', True):
             dedupe_vault(config.to_dict(), quiet=True)
             records = MetadataStore(config.to_dict()).load_records()
         print('  Metadata JSON: ' + str(len(records)) + ' records')
         save_bk(records, config)
+        missing_paths = _missing_metadata_paths(scanned_records, config)
+        _handle_missing_metadata(missing_paths, config, logger)
         return str(md_store.root)
     except Exception as e:
         logger.error('Task 1: %s', e, exc_info=True)
@@ -267,10 +422,17 @@ def task_analyze_folders(config, logger):
 
 def task_1b(config, logger):
     print('\n  STEP 2: GENERATE EXCEL FROM METADATA')
+    total_start = perf_counter()
     cfg = config.to_dict()
     if config.get('metadata.dedupe_before_excel', True):
+        t = perf_counter()
         dedupe_vault(cfg, quiet=True)
+        print('  Timing: pre-Excel vault dedupe ' + str(round(perf_counter() - t, 2)) + 's')
+    else:
+        print('  Skipping metadata dedupe before Excel; run option 23 if needed.')
+    t = perf_counter()
     records = MetadataStore(cfg).load_records()
+    print('  Timing: metadata load ' + str(round(perf_counter() - t, 2)) + 's')
     if not records:
         records = load_bk(config)
     if not records:
@@ -287,13 +449,17 @@ def task_1b(config, logger):
             r['delete_flag'] = 'No'
     ad = None
     try:
+        t = perf_counter()
         from src.analytics import StorageAnalytics
         ad = StorageAnalytics().analyze(records)
+        print('  Timing: analytics ' + str(round(perf_counter() - t, 2)) + 's')
     except Exception:
         pass
+    t = perf_counter()
     ep = ExcelWriter(cfg).write(
         records, config.get('scan.folder_path'), analytics_data=ad
     )
+    print('  Timing: Excel write ' + str(round(perf_counter() - t, 2)) + 's')
     if ep:
         save_last_excel_path(config, ep)
         print('  Excel: ' + str(ep))
@@ -306,6 +472,7 @@ def task_1b(config, logger):
                     print('  Comparisons: ' + str(out))
             except Exception as e:
                 print('  Comparison skipped: ' + str(e))
+    print('  Timing: option 31 total ' + str(round(perf_counter() - total_start, 2)) + 's')
     return ep
 
 
@@ -330,6 +497,183 @@ def task_dedupe_vault(config, logger):
         print('  Error: ' + str(e))
 
 
+def _path_under(path, root):
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _generated_quarantine_target(path, workspace_root, protected_roots):
+    p = Path(path).expanduser()
+    if not p:
+        return None
+    try:
+        rp = p.resolve()
+        wr = Path(workspace_root).resolve()
+    except Exception:
+        return None
+    if rp == wr or not _path_under(rp, wr):
+        return None
+    for root in protected_roots:
+        if root and _path_under(rp, root):
+            return None
+    return rp
+
+
+def task_fresh_restart_metadata(config, logger):
+    print('\n  FRESH RESTART METADATA VAULT')
+    print('  ' + '=' * 50)
+    try:
+        workspace_root = Path(config.get('workspace.root')).expanduser().resolve()
+        protected_roots = [
+            config.get('scan.folder_path'),
+            config.get('organization.output_folder'),
+        ]
+        targets = []
+        metadata_root = config.get('metadata.root_folder')
+        if metadata_root:
+            targets.append(('metadata folder', metadata_root))
+        checkpoint_file = config.get('processing.checkpoint_file')
+        if checkpoint_file:
+            targets.append(('checkpoints folder', str(Path(checkpoint_file).parent)))
+        backup = records_backup_path(config)
+        targets.append(('records backup', str(backup)))
+
+        safe_targets = []
+        for label, raw in targets:
+            target = _generated_quarantine_target(raw, workspace_root, protected_roots)
+            if target:
+                safe_targets.append((label, target))
+            else:
+                print('  Skipped unsafe target: ' + label + ' -> ' + str(raw))
+
+        if not safe_targets:
+            print('  Nothing safe to quarantine.')
+            return
+
+        print('  This moves generated metadata state to quarantine:')
+        for label, target in safe_targets:
+            print('  - ' + label + ': ' + str(target))
+        print('  Photos are not deleted from scan or organized folders.')
+        if input('  Type DELETE METADATA to continue: ').strip() != 'DELETE METADATA':
+            print('  Cancelled')
+            return
+
+        stats = quarantine_generated_targets(
+            config.to_dict(),
+            safe_targets,
+            action='fresh-restart',
+            manifest_prefix='fresh-restart-manifest',
+        )
+
+        Path(config.get('metadata.root_folder')).mkdir(parents=True, exist_ok=True)
+        if checkpoint_file:
+            Path(checkpoint_file).parent.mkdir(parents=True, exist_ok=True)
+        print('  Quarantined generated target(s): ' + str(stats.get('moved', 0)))
+        print('  Quarantine folder: ' + str(stats.get('run_root', '')))
+        print('  Manifest: ' + str(stats.get('manifest_path', '')))
+        print('  Starting fresh scan...')
+        return task_1(config, logger)
+    except Exception as e:
+        logger.error('Fresh restart metadata: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
+def _missing_value(value):
+    if value is None:
+        return True
+    if value == '' or value == [] or value == {}:
+        return True
+    if isinstance(value, str) and value.strip().lower() in ('unknown', 'none', 'no exif'):
+        return True
+    return False
+
+
+def _merge_missing_record(existing, fresh):
+    merged = dict(existing or {})
+    for key, value in (fresh or {}).items():
+        if _missing_value(value):
+            continue
+        if key not in merged or _missing_value(merged.get(key)):
+            merged[key] = value
+    if fresh.get('last_seen_at'):
+        merged['last_seen_at'] = fresh.get('last_seen_at')
+    return merged
+
+
+def task_enrich_metadata(config, logger):
+    print('\n  ENRICH EXISTING METADATA')
+    print('  ' + '=' * 50)
+    try:
+        md_store = MetadataStore(config.to_dict())
+        existing = md_store.load_records(exclude_missing=False)
+        if not existing:
+            print('  No metadata records found. Run Build / Refresh first.')
+            return
+        by_path = {}
+        files = []
+        for rec in existing:
+            fp = str(rec.get('full_path') or '').strip()
+            if fp and Path(fp).is_file():
+                key = _norm_path(fp)
+                by_path[key] = rec
+                files.append(fp)
+        files = sorted(set(files))
+        if not files:
+            print('  No existing metadata records point to files on disk.')
+            return
+        print('  Files to enrich: ' + str(len(files)))
+        print('  Mode: fill missing fields only; global checkpoint is ignored.')
+        if input('  Proceed? (yes/no): ').strip().lower() != 'yes':
+            print('  Cancelled')
+            return
+
+        try:
+            interval = int(config.get('processing.metadata_flush_interval', 100) or 100)
+        except (TypeError, ValueError):
+            interval = 100
+        interval = max(1, interval)
+        pending = []
+        enriched = []
+
+        def flush(force=False):
+            nonlocal pending
+            if not pending:
+                return
+            if not force and len(pending) < interval:
+                return
+            batch = _with_scan_defaults(list(pending))
+            md_store.upsert_records(batch)
+            try:
+                md_store.rebuild_index()
+            except Exception:
+                pass
+            print('  Enrichment batch saved: ' + str(len(batch)) + ' records')
+            pending = []
+
+        def on_record(fresh):
+            key = _norm_path(fresh.get('full_path') or fresh.get('file_path') or '')
+            merged = _merge_missing_record(by_path.get(key, {}), fresh)
+            pending.append(merged)
+            enriched.append(merged)
+            if len(enriched) % interval == 0:
+                flush(force=True)
+
+        scanner = ImageScanner(config.to_dict())
+        scanner.scan_files(files, batch_callback=on_record)
+        flush(force=True)
+        if enriched:
+            md_store.upsert_records(_with_scan_defaults(enriched))
+            md_store.rebuild_index()
+            save_bk(md_store.load_records(exclude_missing=False), config)
+        print('  Enriched metadata records: ' + str(len(enriched)))
+    except Exception as e:
+        logger.error('Enrich metadata: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
 def task_cleanup_untagged(config, logger):
     print('\n  CLEANUP UNTAGGED SAMPLE FOLDERS')
     print('  ' + '=' * 50)
@@ -340,13 +684,27 @@ def task_cleanup_untagged(config, logger):
 
 
 def task_2(ep, config, logger):
-    print('\n  STEP 3: APPLY EXCEL DELETE ACTIONS')
+    print('\n  STEP 3: APPLY EXCEL DELETE ACTIONS (QUARANTINE)')
     try:
         import openpyxl
         wb = openpyxl.load_workbook(ep)
+        print('  Select sheet actions to apply:')
+        print('  1. Duplicates sheet (default)')
+        print('  2. Similar Images sheet')
+        print('  3. All Images sheet')
+        print('  4. All available sheets')
+        sheet_choice = input('  Choice (Enter=1): ').strip() or '1'
+        sheet_map = {
+            '1': ['Duplicates'],
+            '2': ['Similar Images'],
+            '3': ['All Images'],
+            '4': ['Duplicates', 'Similar Images', 'All Images'],
+        }
+        sheet_names = sheet_map.get(sheet_choice, ['Duplicates'])
         targets = []
-        for sn in ['All Images', 'Duplicates', 'Similar Images']:
+        for sn in sheet_names:
             if sn not in wb.sheetnames:
+                print('  Sheet not found, skipped: ' + sn)
                 continue
             ws = wb[sn]
             hdr = {str(c.value).strip().lower(): ci for ci, c in enumerate(ws[1], 1) if c.value}
@@ -354,59 +712,63 @@ def task_2(ep, config, logger):
             if not fci:
                 continue
             dci = None
-            sci = None
-            dupi = None
             mci = hdr.get('metadata json path')
             midci = hdr.get('media id')
+            md5ci = hdr.get('md5 hash')
+            groupci = hdr.get('dup group') or hdr.get('group') or hdr.get('duplicate group')
             for h, ci in hdr.items():
                 if 'delete' in h:
                     dci = ci
-                if h == 'similar?' or 'similar?' in h:
-                    sci = ci
-                if h == 'duplicate?' or 'dup?' in h:
-                    dupi = ci
+            if not dci:
+                print('  No DELETE? column, skipped: ' + sn)
+                continue
             for ri in range(2, ws.max_row + 1):
                 fp = ws.cell(row=ri, column=fci).value
                 if not fp:
                     continue
                 delete_flag = ws.cell(row=ri, column=dci).value if dci else ''
-                similar_flag = ws.cell(row=ri, column=sci).value if sci else ''
-                dup_flag = ws.cell(row=ri, column=dupi).value if dupi else ''
-                delete_me = any(
-                    str(v).strip().lower() in ('yes', 'true', '1')
-                    for v in [delete_flag, similar_flag, dup_flag]
-                )
+                delete_me = str(delete_flag).strip().lower() in ('yes', 'true', '1')
                 if not delete_me:
                     continue
                 mp = ws.cell(row=ri, column=mci).value if mci else ''
                 mid = ws.cell(row=ri, column=midci).value if midci else ''
+                md5 = ws.cell(row=ri, column=md5ci).value if md5ci else ''
+                group = ws.cell(row=ri, column=groupci).value if groupci else ''
                 targets.append({
                     'full_path': str(fp),
                     'metadata_json_path': str(mp or '').strip(),
                     'media_id': str(mid or '').strip(),
+                    'md5_hash': str(md5 or '').strip(),
+                    'duplicate_group': str(group or '').strip(),
+                    'sheet': sn,
                 })
 
         if not targets:
-            print('  Nothing to delete')
+            print('  Nothing marked for quarantine')
             return
         uniq = {}
         for t in targets:
             uniq[t['full_path']] = t
         print('  ' + str(len(uniq)) + ' files marked')
-        if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
+        print('  Files will be moved to quarantine, not permanently deleted.')
+        if input('  Confirm quarantine? (yes/no): ').strip().lower() != 'yes':
             return
-        stats = delete_media_cascade(config.to_dict(), list(uniq.values()), delete_files=True)
+        stats = quarantine_media_cascade(config.to_dict(), list(uniq.values()))
         print(
-            '  Images deleted: ' + str(stats['files_deleted'])
+            '  Images moved: ' + str(stats['files_moved'])
             + ' | missing: ' + str(stats['files_missing'])
         )
         print(
-            '  Metadata deleted: ' + str(stats['json_deleted'])
-            + ' | untagged dirs: ' + str(stats['untagged_removed'])
+            '  Metadata moved: ' + str(stats['json_moved'])
+            + ' | missing metadata: ' + str(stats['json_missing'])
             + ' | face index rows: ' + str(stats['face_rows_removed'])
         )
+        print('  Quarantine folder: ' + str(stats.get('quarantine_root', '')))
+        print('  Manifest: ' + str(stats.get('manifest_path', '')))
+        print('  Rechecking duplicates across remaining metadata...')
+        _recompute_duplicate_metadata(config)
         dedupe_vault(config.to_dict(), quiet=True)
-        auto_reconcile_if_enabled(config.to_dict(), 'after delete')
+        auto_reconcile_if_enabled(config.to_dict(), 'after quarantine')
         records = MetadataStore(config.to_dict()).load_records()
         if records:
             save_bk(records, config)
@@ -671,10 +1033,12 @@ def main():
             print('  21. Build / Refresh Metadata Vault')
             print('  22. Reconcile Vault Paths (Update to latest)')
             print('  23. Clean / Dedupe Metadata files')
+            print('  24. Fresh restart metadata vault')
+            print('  25. Enrich existing metadata')
 
             print('\n  --- 3. EXCEL & DATA ---')
             print('  31. Generate/Refresh Excel')
-            print('  32. Apply Excel delete actions')
+            print('  32. Apply Excel delete actions (quarantine)')
             
             print('\n  --- 4. LIBRARY ORGANIZATION ---')
             print('  41. Organize library from Excel')
@@ -703,6 +1067,10 @@ def main():
                 task_reconcile_paths(config, logger)
             elif ch == '23':
                 task_dedupe_vault(config, logger)
+            elif ch == '24':
+                task_fresh_restart_metadata(config, logger)
+            elif ch == '25':
+                task_enrich_metadata(config, logger)
             elif ch == '31':
                 last_excel = task_1b(config, logger) or last_excel
             elif ch == '32':

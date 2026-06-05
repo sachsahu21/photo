@@ -3,9 +3,11 @@ Image and Video Scanner v4.1
 """
 
 import os
+import mimetypes
 import logging
 from pathlib import Path
 from datetime import datetime
+from math import gcd
 
 from tqdm import tqdm
 
@@ -39,6 +41,68 @@ except ImportError:
     NP_OK = False
 
 
+def _ts(value):
+    try:
+        return datetime.fromtimestamp(value).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return ''
+
+
+def _utc_now():
+    return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _ratio_to_float(value):
+    if value is None or value == '':
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    try:
+        if isinstance(value, (tuple, list)) and len(value) == 2 and value[1]:
+            return float(value[0]) / float(value[1])
+    except Exception:
+        pass
+    return None
+
+
+def _exposure_to_string(value):
+    f = _ratio_to_float(value)
+    if f is None:
+        return safe_string(value)
+    if f > 0 and f < 1:
+        return '1/' + str(int(round(1 / f)))
+    return str(round(f, 4))
+
+
+def _aspect_ratio(width, height):
+    try:
+        w = int(width or 0)
+        h = int(height or 0)
+        if w <= 0 or h <= 0:
+            return None
+        g = gcd(w, h)
+        return str(w // g) + ':' + str(h // g)
+    except Exception:
+        return None
+
+
+def _orientation(width, height):
+    try:
+        w = int(width or 0)
+        h = int(height or 0)
+        if w > h:
+            return 'landscape'
+        if h > w:
+            return 'portrait'
+        if w and h:
+            return 'square'
+    except Exception:
+        pass
+    return None
+
+
 class ImageScanner:
 
     def __init__(self, config):
@@ -55,6 +119,10 @@ class ImageScanner:
         self.duplicates_enabled = dup_cfg.get('enabled', True)
 
         scan_cfg = config.get('scan', {})
+        try:
+            self.scan_root = Path(scan_cfg.get('folder_path', '')).expanduser().resolve()
+        except Exception:
+            self.scan_root = None
         ext_cfg = scan_cfg.get('extensions', {})
         if isinstance(ext_cfg, dict):
             self.image_exts = self._norm(ext_cfg.get('images', []))
@@ -154,7 +222,7 @@ class ImageScanner:
             except Exception:
                 self.geo_enabled = False
 
-    def scan(self, folder_path):
+    def scan(self, folder_path, batch_callback=None):
         folder = Path(folder_path).expanduser().resolve()
         if not folder.exists():
             raise FileNotFoundError('Not found: ' + str(folder))
@@ -194,10 +262,10 @@ class ImageScanner:
         if processed_set:
             files = [f for f in files if str(f) not in processed_set]
 
-        if self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
+        if batch_callback is None and self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
             records = self._scan_parallel(files, checkpoint)
         else:
-            records = self._scan_sequential(files, checkpoint)
+            records = self._scan_sequential(files, checkpoint, batch_callback=batch_callback)
         # After scanning, update global checkpoint with newly processed files
         if global_cp_path:
             new_processed = set()
@@ -223,18 +291,37 @@ class ImageScanner:
 
         return records
 
-    def _scan_sequential(self, files, checkpoint):
+    def scan_files(self, file_paths, batch_callback=None):
+        self._init_features()
+        files = []
+        for fp in file_paths or []:
+            p = Path(fp).expanduser().resolve()
+            if p.is_file() and p.suffix.lower() in self.all_exts:
+                files.append(p)
+        return self._scan_sequential(sorted(files), None, batch_callback=batch_callback)
+
+    def _finalize_record(self, rec):
+        rec['metadata_status'] = determine_metadata_status(rec)
+        rec['date_source'] = determine_date_source(rec)
+        return rec
+
+    def _scan_sequential(self, files, checkpoint, batch_callback=None):
         records = []
         it = tqdm(files, desc='Scanning', unit='file', disable=not self.show_progress)
         for fp in it:
             try:
-                rec = self._extract(fp)
+                rec = self._finalize_record(self._extract(fp))
                 records.append(rec)
                 if checkpoint:
                     checkpoint.mark_processed(str(fp))
+                if batch_callback:
+                    batch_callback(rec)
             except Exception as e:
                 logger.error('Error %s: %s', fp, e)
-                records.append(self._error_record(fp, str(e)))
+                rec = self._finalize_record(self._error_record(fp, str(e)))
+                records.append(rec)
+                if batch_callback:
+                    batch_callback(rec)
         return records
 
     def _scan_parallel(self, files, checkpoint):
@@ -244,13 +331,13 @@ class ImageScanner:
 
         def process_one(fp):
             try:
-                rec = self._extract(fp)
+                rec = self._finalize_record(self._extract(fp))
                 if checkpoint:
                     checkpoint.mark_processed(str(fp))
                 return rec
             except Exception as e:
                 logger.error('Error %s: %s', fp, e)
-                return self._error_record(fp, str(e))
+                return self._finalize_record(self._error_record(fp, str(e)))
 
         results = pp.process(files, process_one, desc='Scanning (parallel)')
         return [r for r in results if r is not None]
@@ -389,14 +476,22 @@ class ImageScanner:
         ext = filepath.suffix.lower()
         file_type = self._detect_type(ext)
         mod_date = get_file_modification_date(filepath)
+        now = _utc_now()
 
-        file_hash = ''
-        if file_type == 'video' and self.skip_video_hash:
-            file_hash = ''
-        elif self.duplicates_enabled:
-            file_hash = calculate_file_hash(filepath, self.hash_algorithm)
+        md5_hash = ''
+        sha256_hash = ''
+        if not (file_type == 'video' and self.skip_video_hash):
+            md5_hash = calculate_file_hash(filepath, 'md5')
+            sha256_hash = calculate_file_hash(filepath, 'sha256')
 
         mod_str = mod_date.strftime('%Y-%m-%d %H:%M:%S') if mod_date else ''
+        rel_path = ''
+        if self.scan_root:
+            try:
+                rel_path = filepath.resolve().relative_to(self.scan_root).as_posix()
+            except (OSError, ValueError):
+                rel_path = ''
+        mime_type = mimetypes.guess_type(str(filepath))[0] or ''
 
         defaults.update({
             'filename': filepath.name,
@@ -404,9 +499,23 @@ class ImageScanner:
             'full_path': str(filepath),
             'extension': ext.lstrip('.').upper(),
             'file_type': file_type,
+            'mime_type': mime_type,
+            'size_bytes': int(stat.st_size),
             'size_mb': round(stat.st_size / (1024 * 1024), 2),
+            'relative_path': rel_path,
+            'parent_folder': filepath.parent.name,
+            'source_root': str(self.scan_root or ''),
+            'source_type': 'local',
+            'first_seen_at': now,
+            'last_seen_at': now,
+            'created_time': _ts(stat.st_ctime),
+            'modified_time': _ts(stat.st_mtime),
+            'accessed_time': _ts(stat.st_atime),
             'file_modified': mod_str,
-            'md5_hash': file_hash,
+            'md5_hash': md5_hash,
+            'sha256_hash': sha256_hash,
+            'is_hidden': filepath.name.startswith('.'),
+            'is_readonly': not os.access(filepath, os.W_OK),
         })
 
         if file_type == 'image':
@@ -461,6 +570,17 @@ class ImageScanner:
                         count, category, _boxes = self._face_detector.detect_from_image(bgr)
                         defaults['face_count'] = int(count)
                         defaults['face_category'] = category
+                        defaults['face_search_ready'] = int(count) > 0
+                        defaults['face_boxes'] = [
+                            {
+                                'face_id': 'FACE-' + str(i + 1).zfill(4),
+                                'person_id': 'UNK-' + str(i + 1).zfill(4),
+                                'person_name': None,
+                                'confidence': None,
+                                'bbox': {'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h)},
+                            }
+                            for i, (x, y, w, h) in enumerate(_boxes or [])
+                        ]
                     except Exception:
                         pass
 
@@ -508,7 +628,22 @@ class ImageScanner:
         try:
             meta['width'] = pil_img.width
             meta['height'] = pil_img.height
+            if pil_img.width and pil_img.height:
+                meta['megapixels'] = round((pil_img.width * pil_img.height) / 1000000.0, 2)
+                meta['aspect_ratio'] = _aspect_ratio(pil_img.width, pil_img.height)
+                meta['orientation'] = _orientation(pil_img.width, pil_img.height)
             meta['mode'] = pil_img.mode
+            meta['has_alpha'] = (
+                pil_img.mode in ('RGBA', 'LA')
+                or (pil_img.mode == 'P' and 'transparency' in pil_img.info)
+            )
+            if pil_img.info.get('icc_profile'):
+                meta['color_space'] = 'ICC profile'
+            elif pil_img.mode in ('RGB', 'RGBA'):
+                meta['color_space'] = 'sRGB'
+            else:
+                meta['color_space'] = pil_img.mode
+            meta['compression'] = pil_img.format or filepath.suffix.lstrip('.').upper()
 
             try:
                 dpi = pil_img.info.get('dpi')
@@ -524,13 +659,55 @@ class ImageScanner:
                     exif = {TAGS.get(tid, str(tid)): v for tid, v in exif_raw.items()}
                     meta['camera_make'] = safe_string(exif.get('Make', ''))
                     meta['camera_model'] = safe_string(exif.get('Model', ''))
+                    meta['lens_model'] = safe_string(exif.get('LensModel', ''))
                     meta['date_taken'] = parse_exif_date(exif)
+                    meta['software'] = safe_string(exif.get('Software', ''))
+                    meta['exif_orientation'] = exif.get('Orientation')
 
-                    gps_lat, gps_lon = parse_gps_coordinates(exif.get('GPSInfo'))
+                    iso = exif.get('ISOSpeedRatings') or exif.get('PhotographicSensitivity')
+                    if iso not in (None, ''):
+                        try:
+                            meta['iso'] = int(iso)
+                        except (TypeError, ValueError):
+                            meta['iso'] = safe_string(iso)
+
+                    aperture = _ratio_to_float(exif.get('FNumber'))
+                    if aperture is not None:
+                        meta['aperture'] = round(aperture, 2)
+
+                    exposure = exif.get('ExposureTime')
+                    if exposure not in (None, ''):
+                        meta['exposure_time'] = _exposure_to_string(exposure)
+
+                    focal = _ratio_to_float(exif.get('FocalLength'))
+                    if focal is not None:
+                        meta['focal_length'] = round(focal, 2)
+
+                    if exif.get('Flash') not in (None, ''):
+                        meta['flash'] = safe_string(exif.get('Flash'))
+                    if exif.get('WhiteBalance') not in (None, ''):
+                        meta['white_balance'] = safe_string(exif.get('WhiteBalance'))
+
+                    gps_info = exif.get('GPSInfo')
+                    try:
+                        if hasattr(exif_raw, 'get_ifd'):
+                            gps_info = exif_raw.get_ifd(34853) or gps_info
+                    except Exception:
+                        pass
+
+                    gps_lat, gps_lon = parse_gps_coordinates(gps_info)
                     if gps_lat is not None:
                         meta['gps_lat'] = round(gps_lat, 6)
                     if gps_lon is not None:
                         meta['gps_lon'] = round(gps_lon, 6)
+                    try:
+                        alt = _ratio_to_float((gps_info or {}).get(6))
+                        if alt is not None:
+                            if int((gps_info or {}).get(5) or 0) == 1:
+                                alt = -alt
+                            meta['gps_altitude'] = round(alt, 2)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -575,18 +752,36 @@ class ImageScanner:
 
     def _error_record(self, filepath, msg):
         rec = get_record_defaults()
+        now = _utc_now()
         try:
             stat = filepath.stat()
+            rec['size_bytes'] = int(stat.st_size)
             rec['size_mb'] = round(stat.st_size / (1024 * 1024), 2)
             mod_time = datetime.fromtimestamp(stat.st_mtime)
             rec['file_modified'] = mod_time.strftime('%Y-%m-%d %H:%M:%S')
+            rec['created_time'] = _ts(stat.st_ctime)
+            rec['modified_time'] = _ts(stat.st_mtime)
+            rec['accessed_time'] = _ts(stat.st_atime)
         except Exception:
             pass
+        rel_path = ''
+        if self.scan_root:
+            try:
+                rel_path = filepath.resolve().relative_to(self.scan_root).as_posix()
+            except (OSError, ValueError):
+                rel_path = ''
         rec['filename'] = filepath.name
         rec['folder'] = str(filepath.parent)
         rec['full_path'] = str(filepath)
         rec['extension'] = filepath.suffix.lstrip('.').upper()
         rec['file_type'] = self._detect_type(filepath.suffix.lower())
+        rec['mime_type'] = mimetypes.guess_type(str(filepath))[0] or ''
+        rec['relative_path'] = rel_path
+        rec['parent_folder'] = filepath.parent.name
+        rec['source_root'] = str(self.scan_root or '')
+        rec['source_type'] = 'local'
+        rec['first_seen_at'] = now
+        rec['last_seen_at'] = now
         rec['error'] = msg[:120]
         rec['quality_score'] = 0
         rec['quality_issues'] = 'Error: ' + msg[:80]

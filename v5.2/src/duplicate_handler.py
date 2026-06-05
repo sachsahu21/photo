@@ -18,12 +18,11 @@ class DuplicateHandler:
         for i, r in enumerate(records):
             h = r.get('md5_hash', '')
             if h:
-                hm[h].append(i)
-        groups, gid = {}, 1
-        for h, idx in hm.items():
+                hm[str(h).strip().lower()].append(i)
+        groups = {}
+        for h, idx in sorted(hm.items()):
             if len(idx) > 1:
-                groups[gid] = idx
-                gid += 1
+                groups['MD5-' + h[:12].upper()] = idx
         return groups
 
     def select_best(self, records, indices):
@@ -64,18 +63,27 @@ class DuplicateHandler:
 
     def mark_duplicates(self, records):
         for r in records:
-            r.setdefault('is_duplicate', 'No')
-            r.setdefault('duplicate_group', '')
-            r.setdefault('is_best_in_group', '')
-            r.setdefault('recommendation', '')
+            r['is_duplicate'] = 'No'
+            r['duplicate_group'] = ''
+            r['duplicate_type'] = ''
+            r['master_media_id'] = ''
+            r['is_best_in_group'] = ''
+            if str(r.get('recommendation', '')).startswith(('Keep (Best)', 'Delete (Duplicate)', 'Review (Blurry)')):
+                r['recommendation'] = ''
+            if str(r.get('delete_flag', '')).strip().lower() in ('yes', 'true', '1'):
+                r['delete_flag'] = 'No'
         groups = self.find_duplicates(records)
         total = 0
-        for gid, indices in groups.items():
-            label = 'DUP-' + str(gid).zfill(4)
+        for label, indices in groups.items():
             best = self.select_best(records, indices)
+            master_media_id = ''
+            if best is not None:
+                master_media_id = str(records[best].get('media_id') or records[best].get('md5_hash') or '').strip()
             for idx in indices:
                 records[idx]['is_duplicate'] = 'YES'
                 records[idx]['duplicate_group'] = label
+                records[idx]['duplicate_type'] = 'exact_md5'
+                records[idx]['master_media_id'] = master_media_id
                 total += 1
                 if idx == best:
                     records[idx]['is_best_in_group'] = 'Yes'

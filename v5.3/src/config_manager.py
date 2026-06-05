@@ -137,7 +137,7 @@ class ConfigManager:
             },
             'faces': {
                 'enabled': False,
-                'seed_root': './seed',
+                'seed_root': 'seed',
                 'target_person': '',
                 'library_source': 'scan',
                 'data_subfolder': 'face_data',

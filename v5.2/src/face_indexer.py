@@ -65,7 +65,10 @@ class FaceIndexer:
         self.max_results = int(self.faces_cfg.get("max_results", 50000))
         if self.max_results < 0:
             self.max_results = 0
-        self.index_db = Path(self.faces_cfg.get("index_db") or "")
+        index_db = str(self.faces_cfg.get("index_db") or "").strip()
+        if not index_db:
+            index_db = str(self.faces_cfg.get("index_db_filename") or "face_index.sqlite").strip() or "face_index.sqlite"
+        self.index_db = Path(index_db).expanduser()
         if not str(self.index_db):
             raise ValueError("faces.index_db not resolved; set workspace.root in config.yaml")
 
@@ -174,7 +177,11 @@ class FaceIndexer:
 
     def build_or_update_index(self, recursive: bool = True) -> Tuple[int, int]:
         self._require_enabled()
-        self._ensure_models()
+        try:
+            self._ensure_models()
+        except RuntimeError as exc:
+            logger.warning("Face indexing skipped: %s", exc)
+            return 0, 0
 
         root = self._get_library_root()
         con = self._open_db()
@@ -225,6 +232,10 @@ class FaceIndexer:
             con.close()
 
     def _seed_person_dirs(self) -> List[Tuple[str, Path]]:
+        try:
+            self.seed_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if not self.seed_root.exists():
             return []
         if self.target_person:
@@ -253,17 +264,23 @@ class FaceIndexer:
 
     def find_person(self) -> List[Dict[str, Any]]:
         self._require_enabled()
-        self._ensure_models()
+        try:
+            self._ensure_models()
+        except RuntimeError as exc:
+            logger.warning("Known person matching skipped: %s", exc)
+            return []
 
         person_dirs = self._seed_person_dirs()
         if not person_dirs:
-            raise RuntimeError(f"No seed person folders found under: {self.seed_root}")
+            logger.warning("No seed person folders found under: %s; skipping known matches.", self.seed_root)
+            return []
 
         con = self._open_db()
         try:
             rows = con.execute("SELECT file_path, embedding FROM faces").fetchall()
             if not rows:
-                raise RuntimeError("Face index is empty. Run 'Build/Update Face Index' first.")
+                logger.warning("Face index is empty. Run 'Build/Update Face Index' first.")
+                return []
 
             paths: List[str] = []
             embs: List[np.ndarray] = []

@@ -41,6 +41,7 @@ v5.0 - cursor,  with face detection and clear to ptions
 v5.1 - Jules
 v5.2 - anti gravity - locked the version its working properly (commit #1)
 v5.3 - Codex
+v5.4 - claude code
 v6.2 live version 
 
 

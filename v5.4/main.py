@@ -612,20 +612,32 @@ def task_enrich_metadata(config, logger):
         if not existing:
             print('  No metadata records found. Run Build / Refresh first.')
             return
+        _ENRICH_FIELDS = ('date_taken', 'camera_model', 'blur_score', 'width', 'height', 'gps_lat', 'gps_lon')
+
+        def _is_complete(rec):
+            return all(not _missing_value(rec.get(f)) for f in _ENRICH_FIELDS)
+
         by_path = {}
         files = []
+        skipped_complete = 0
         for rec in existing:
             fp = str(rec.get('full_path') or '').strip()
             if fp and Path(fp).is_file():
                 key = _norm_path(fp)
+                if _is_complete(rec):
+                    skipped_complete += 1
+                    continue
                 by_path[key] = rec
                 files.append(fp)
         files = sorted(set(files))
         if not files:
             print('  No existing metadata records point to files on disk.')
+            if skipped_complete:
+                print('  All ' + str(skipped_complete) + ' records are already complete — nothing to enrich.')
             return
         total = len(files)
-        print('  Files to enrich: ' + str(total))
+        print('  Files to enrich: ' + str(total) +
+              (' (skipped ' + str(skipped_complete) + ' already complete)' if skipped_complete else ''))
         print('  Mode: fill missing fields only; global checkpoint is ignored.')
         if input('  Proceed? (yes/no): ').strip().lower() != 'yes':
             print('  Cancelled')
