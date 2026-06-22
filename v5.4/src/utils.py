@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 HASH_BUFFER_SIZE = 8 * 1024 * 1024
 _print_lock = threading.Lock()
 
+# Compiled once at module load — avoids recompilation on every call
+_DATE_FOLDER_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})')
+_MONTH_FOLDER_RE = re.compile(r'^(\d{4}-\d{2}-00)')
+
 
 def thread_safe_print(msg):
     with _print_lock:
@@ -36,6 +40,27 @@ def calculate_file_hash(filepath, algorithm='md5'):
         return ""
 
 
+def calculate_file_hashes(filepath):
+    """Compute MD5 and SHA256 in a single file read. Returns (md5_hex, sha256_hex)."""
+    try:
+        filepath = Path(filepath)
+        if not filepath.exists():
+            return "", ""
+        md5 = hashlib.md5()
+        sha256 = hashlib.sha256()
+        with open(filepath, 'rb') as f:
+            while True:
+                chunk = f.read(HASH_BUFFER_SIZE)
+                if not chunk:
+                    break
+                md5.update(chunk)
+                sha256.update(chunk)
+        return md5.hexdigest(), sha256.hexdigest()
+    except Exception as e:
+        logger.warning('Hash error %s: %s', filepath, e)
+        return "", ""
+
+
 def get_file_size_mb(filepath):
     try:
         return Path(filepath).stat().st_size / (1024 * 1024)
@@ -50,6 +75,17 @@ def get_file_modification_date(filepath):
         return None
 
 
+_DATETIME_FORMATS = [
+    '%Y:%m:%d %H:%M:%S',  # EXIF standard — most common, fast-path first
+    '%Y-%m-%d %H:%M:%S',
+    '%Y-%m-%dT%H:%M:%S',
+    '%Y/%m/%d %H:%M:%S',
+    '%d/%m/%Y %H:%M:%S',
+    '%Y-%m-%d',
+    '%Y:%m:%d',
+]
+
+
 def parse_datetime_flexible(value):
     if isinstance(value, datetime):
         return value
@@ -58,10 +94,7 @@ def parse_datetime_flexible(value):
     cleaned = str(value).strip().replace('\x00', '')
     if not cleaned:
         return None
-    for fmt in [
-        '%Y-%m-%d %H:%M:%S', '%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S',
-        '%Y/%m/%d %H:%M:%S', '%d/%m/%Y %H:%M:%S', '%Y-%m-%d', '%Y:%m:%d',
-    ]:
+    for fmt in _DATETIME_FORMATS:
         try:
             return datetime.strptime(cleaned, fmt)
         except (ValueError, TypeError):
@@ -148,7 +181,7 @@ def format_pic_count(count):
 
 def is_valid_date_folder(folder_name):
     """Check if folder name starts with YYYY-MM-DD pattern."""
-    m = re.compile('^(\\d{4}-\\d{2}-\\d{2})').match(str(folder_name))
+    m = _DATE_FOLDER_RE.match(str(folder_name))
     if m:
         try:
             datetime.strptime(m.group(1), '%Y-%m-%d')
@@ -160,7 +193,7 @@ def is_valid_date_folder(folder_name):
 
 def is_valid_month_folder(folder_name):
     """Check if folder name starts with YYYY-MM-00 pattern."""
-    m = re.compile('^(\\d{4}-\\d{2}-00)').match(str(folder_name))
+    m = _MONTH_FOLDER_RE.match(str(folder_name))
     return m.group(1) if m else None
 
 

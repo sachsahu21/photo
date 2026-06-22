@@ -14,7 +14,7 @@ from tqdm import tqdm
 from .blur_detector import BlurDetector
 from .video_metadata import VideoMetadataExtractor
 from .utils import (
-    calculate_file_hash, safe_string, parse_exif_date,
+    calculate_file_hash, calculate_file_hashes, safe_string, parse_exif_date,
     parse_gps_coordinates, get_file_modification_date,
     get_record_defaults, determine_metadata_status, determine_date_source
 )
@@ -481,8 +481,7 @@ class ImageScanner:
         md5_hash = ''
         sha256_hash = ''
         if not (file_type == 'video' and self.skip_video_hash):
-            md5_hash = calculate_file_hash(filepath, 'md5')
-            sha256_hash = calculate_file_hash(filepath, 'sha256')
+            md5_hash, sha256_hash = calculate_file_hashes(filepath)
 
         mod_str = mod_date.strftime('%Y-%m-%d %H:%M:%S') if mod_date else ''
         rel_path = ''

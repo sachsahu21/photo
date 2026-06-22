@@ -6,6 +6,7 @@ import json
 import csv
 import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -142,16 +143,41 @@ def iter_vault_json_paths(store: MetadataStore) -> List[Path]:
     return sorted(p for p in store.root.glob("*.json") if p.name != store.index_path.name)
 
 
-def rebuild_vault_index(config: Dict[str, Any]) -> int:
-    store = MetadataStore(config)
-    index: List[Dict[str, str]] = []
-    for jp in iter_vault_json_paths(store):
+def _read_vault_json_parallel(
+    paths: List[Path],
+    workers: int = 8,
+) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Read vault JSON files in parallel. Returns (path, doc) pairs for valid docs."""
+    results: List[Tuple[Path, Dict[str, Any]]] = []
+
+    def _read(jp: Path):
         try:
             doc = json.loads(jp.read_text(encoding="utf-8"))
+            if isinstance(doc, dict):
+                return jp, doc
         except Exception:
-            continue
-        if not isinstance(doc, dict):
-            continue
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for item in as_completed({pool.submit(_read, jp): jp for jp in paths}):
+            result = item.result()
+            if result is not None:
+                results.append(result)
+    return results
+
+
+def rebuild_vault_index(
+    config: Dict[str, Any],
+    parsed: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
+) -> int:
+    """Write metadata-index.json. Pass `parsed` to reuse already-read docs and skip disk re-read."""
+    store = MetadataStore(config)
+    if parsed is None:
+        paths = iter_vault_json_paths(store)
+        parsed = _read_vault_json_parallel(paths)
+    index: List[Dict[str, str]] = []
+    for jp, doc in parsed:
         f = doc.get("file") if isinstance(doc.get("file"), dict) else {}
         index.append(
             {
@@ -265,6 +291,13 @@ def find_json_path(
         p = Path(metadata_json_path)
         if p.is_file():
             return p
+    # Try path-hash lookup first (O(1)) — avoids scanning vault when full_path is known
+    fp = (full_path or "").strip()
+    if fp:
+        candidate = store._json_path_for_record({"full_path": fp})
+        if candidate.exists():
+            return candidate
+    # Fall back to media_id scan only when path-hash misses
     mid = (media_id or "").strip().lower()
     if mid:
         for jp in iter_vault_json_paths(store):
@@ -274,11 +307,6 @@ def find_json_path(
                     return jp
             except Exception:
                 continue
-    fp = (full_path or "").strip()
-    if fp:
-        candidate = store._json_path_for_record({"full_path": fp})
-        if candidate.exists():
-            return candidate
     return None
 
 
@@ -543,6 +571,130 @@ def quarantine_media_cascade(
     _write_manifest(manifest, rows)
     stats["manifest_path"] = str(manifest)
     rebuild_vault_index(config)
+    return stats
+
+
+def quarantine_files_fast(
+    config: Dict[str, Any],
+    targets: List[Dict[str, str]],
+    *,
+    action: str = "delete-actions",
+) -> Dict[str, Any]:
+    """Move media files to quarantine only — no vault scan, no index rebuild.
+
+    JSON metadata files are relocated using the O(1) path-hash lookup when
+    possible. Skips the full vault walk and index rebuild so the operation
+    completes in seconds regardless of library size. Call option 24 (Dedupe
+    Vault) afterwards to purge any orphaned metadata JSON files.
+    """
+    store = MetadataStore(config)
+    q_cfg = config.get("quarantine") or {}
+    manifest_prefix = str(q_cfg.get("manifest_prefix") or "quarantine-manifest").strip()
+    run_root = _unique_path(_quarantine_base(config) / (action + "-" + _timestamp()))
+    media_root = run_root / "media"
+    metadata_root = run_root / "metadata"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    stats: Dict[str, Any] = {
+        "files_moved": 0,
+        "files_missing": 0,
+        "json_moved": 0,
+        "json_missing": 0,
+        "face_rows_removed": 0,
+        "manifest_path": "",
+        "quarantine_root": str(run_root),
+    }
+    seen_json: Set[str] = set()
+    paths_for_face: List[str] = []
+    rows: List[Dict[str, Any]] = []
+
+    for t in targets:
+        fp = str(t.get("full_path") or "").strip()
+        mp = str(t.get("metadata_json_path") or "").strip()
+        mid = str(t.get("media_id") or "").strip()
+        sheet = str(t.get("sheet") or "").strip()
+        md5 = str(t.get("md5_hash") or "").strip()
+        dup_group = str(t.get("duplicate_group") or "").strip()
+        quarantine_path = ""
+        quarantined_metadata_path = ""
+        status = []
+        error = ""
+
+        # --- move media file ---
+        if fp:
+            paths_for_face.append(fp)
+            try:
+                src = Path(fp)
+                if src.is_file():
+                    rel = _quarantine_relative_path(config, src)
+                    dest = _unique_path(media_root / rel)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(dest))
+                    quarantine_path = str(dest)
+                    stats["files_moved"] += 1
+                    status.append("file_moved")
+                else:
+                    stats["files_missing"] += 1
+                    status.append("file_missing")
+            except Exception as e:
+                stats["files_missing"] += 1
+                status.append("file_error")
+                error = str(e)
+
+        # --- O(1) JSON lookup: explicit path → path-hash only (no vault scan) ---
+        jp: Optional[Path] = None
+        if mp:
+            p = Path(mp)
+            if p.is_file():
+                jp = p
+        if jp is None and fp:
+            candidate = store._json_path_for_record({"full_path": fp})
+            if candidate.exists():
+                jp = candidate
+
+        if jp is None:
+            stats["json_missing"] += 1
+            status.append("json_missing")
+        else:
+            jkey = str(jp.resolve())
+            if jkey not in seen_json:
+                seen_json.add(jkey)
+                try:
+                    dest = _unique_path(metadata_root / jp.name)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(jp), str(dest))
+                    quarantined_metadata_path = str(dest)
+                    stats["json_moved"] += 1
+                    status.append("json_moved")
+                except Exception as e:
+                    stats["json_missing"] += 1
+                    status.append("json_error")
+                    error = (error + "; " if error else "") + str(e)
+
+        rows.append(
+            {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "action": action,
+                "sheet": sheet,
+                "media_id": mid,
+                "original_path": fp,
+                "quarantine_path": quarantine_path,
+                "metadata_json_path": mp,
+                "quarantined_metadata_path": quarantined_metadata_path,
+                "md5_hash": md5,
+                "duplicate_group": dup_group,
+                "status": ", ".join(status),
+                "error": error,
+            }
+        )
+
+    if paths_for_face:
+        stats["face_rows_removed"] = remove_face_index_paths(config, paths_for_face)
+
+    manifest = _manifest_path(run_root, manifest_prefix)
+    _write_manifest(manifest, rows)
+    stats["manifest_path"] = str(manifest)
+    # intentionally skip rebuild_vault_index — user runs option 24 for that
     return stats
 
 

@@ -123,6 +123,24 @@ def _filename_from_doc(doc: Dict[str, Any]) -> str:
     return fn
 
 
+def _doc_md5(doc: Dict[str, Any]) -> str:
+    f = doc.get("file") if isinstance(doc.get("file"), dict) else {}
+    h = doc.get("hashes") if isinstance(doc.get("hashes"), dict) else {}
+    return str(f.get("md5_hash") or h.get("md5") or "").strip().lower()
+
+
+def _md5_of_file(path: Path) -> str:
+    import hashlib
+    try:
+        h = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
 def _resolve_path(
     doc: Dict[str, Any],
     by_name: Dict[str, List[Path]],
@@ -158,6 +176,25 @@ def _resolve_path(
             except (TypeError, ValueError):
                 pass
         candidates.extend(named)
+
+    # Deduplicate candidates list while preserving order
+    seen_keys: Dict[str, Path] = {}
+    for c in candidates:
+        try:
+            ck = str(c.resolve())
+        except OSError:
+            ck = str(c)
+        seen_keys.setdefault(ck, c)
+    candidates = list(seen_keys.values())
+
+    # When multiple candidates remain (same name + same size in different locations),
+    # use md5 to pick the right one rather than silently assigning the wrong file.
+    if len(candidates) > 1:
+        md5 = _doc_md5(doc)
+        if md5:
+            md5_matches = [c for c in candidates if _md5_of_file(c) == md5]
+            if md5_matches:
+                candidates = md5_matches
 
     picked = _pick_preferred(candidates, prefer, org_root, scan_root)
     return picked

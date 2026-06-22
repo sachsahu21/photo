@@ -24,6 +24,7 @@ from src.vault_maintenance import (
     dedupe_vault,
     quarantine_generated_targets,
     quarantine_media_cascade,
+    quarantine_files_fast,
     cleanup_untagged_orphans,
     save_last_excel_path,
     load_last_excel_path,
@@ -483,6 +484,14 @@ def task_reconcile_paths(config, logger):
         stats = reconcile_vault_paths(config.to_dict())
         if stats.get('dedupe_removed'):
             print('  Dedupe removed: ' + str(stats['dedupe_removed']) + ' duplicate json')
+        orphans = stats.get('missing', 0)
+        if orphans > 0:
+            print('  Orphaned records (file not found anywhere): ' + str(orphans))
+            ans = input('  Remove orphaned vault JSON files? (yes/no): ').strip().lower()
+            if ans == 'yes':
+                from src.metadata_reconcile import reconcile_vault_paths as _rvp
+                purge_stats = _rvp(config.to_dict(), remove_missing=True, quiet=True)
+                print('  Purged ' + str(purge_stats.get('removed', 0)) + ' orphaned vault JSON files.')
     except Exception as e:
         logger.error('Reconcile: %s', e, exc_info=True)
         print('  Error: ' + str(e))
@@ -540,6 +549,12 @@ def task_fresh_restart_metadata(config, logger):
             targets.append(('checkpoints folder', str(Path(checkpoint_file).parent)))
         backup = records_backup_path(config)
         targets.append(('records backup', str(backup)))
+        face_db = str(config.get('faces.index_db') or '').strip()
+        if face_db:
+            targets.append(('face index db', face_db))
+        enrich_ck = _enrich_checkpoint_path(config)
+        if enrich_ck.is_file():
+            targets.append(('enrich checkpoint', str(enrich_ck)))
 
         safe_targets = []
         for label, raw in targets:
@@ -603,6 +618,44 @@ def _merge_missing_record(existing, fresh):
     return merged
 
 
+def _enrich_checkpoint_path(config):
+    ck = str(config.get('processing.checkpoint_file') or '').strip()
+    if ck:
+        return Path(ck).parent / 'enrich_checkpoint.json'
+    from src.workspace_paths import resolve_workspace_root
+    return resolve_workspace_root(config.to_dict()) / 'checkpoints' / 'enrich_checkpoint.json'
+
+
+def _load_enrich_checkpoint(path):
+    try:
+        import json as _json
+        if path.is_file():
+            data = _json.loads(path.read_text(encoding='utf-8'))
+            done = set(data.get('done', []))
+            print('  Checkpoint: ' + str(len(done)) + ' files already processed — will skip them.')
+            return done
+    except Exception:
+        pass
+    return set()
+
+
+def _save_enrich_checkpoint(path, done_set):
+    import json as _json
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({'done': sorted(done_set)}, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _clear_enrich_checkpoint(path):
+    try:
+        if path.is_file():
+            path.unlink()
+    except Exception:
+        pass
+
+
 def task_enrich_metadata(config, logger):
     print('\n  ENRICH EXISTING METADATA')
     print('  ' + '-' * 38)
@@ -613,13 +666,22 @@ def task_enrich_metadata(config, logger):
             print('  No metadata records found. Run Build / Refresh first.')
             return
         _ENRICH_FIELDS = ('date_taken', 'camera_model', 'blur_score', 'width', 'height', 'gps_lat', 'gps_lon')
+        _ALWAYS_COMPUTABLE = ('blur_score', 'width', 'height')
 
         def _is_complete(rec):
+            # Files with no EXIF will never have date_taken/camera_model/gps_lat/gps_lon.
+            # If has_exif is explicitly False, only require the always-computable fields
+            # so the file isn't re-processed on every run.
+            has_exif = rec.get('has_exif')
+            if has_exif is not None and not has_exif:
+                return all(not _missing_value(rec.get(f)) for f in _ALWAYS_COMPUTABLE)
             return all(not _missing_value(rec.get(f)) for f in _ENRICH_FIELDS)
 
         by_path = {}
         files = []
         skipped_complete = 0
+        # --- diagnostic: count missing fields before filtering ---
+        field_missing_counts = {f: 0 for f in _ENRICH_FIELDS}
         for rec in existing:
             fp = str(rec.get('full_path') or '').strip()
             if fp and Path(fp).is_file():
@@ -629,15 +691,56 @@ def task_enrich_metadata(config, logger):
                     continue
                 by_path[key] = rec
                 files.append(fp)
+                for f in _ENRICH_FIELDS:
+                    if _missing_value(rec.get(f)):
+                        field_missing_counts[f] += 1
         files = sorted(set(files))
         if not files:
             print('  No existing metadata records point to files on disk.')
             if skipped_complete:
                 print('  All ' + str(skipped_complete) + ' records are already complete — nothing to enrich.')
             return
-        total = len(files)
-        print('  Files to enrich: ' + str(total) +
+
+        total_incomplete = len(files)
+        print('  Files to enrich: ' + str(total_incomplete) +
               (' (skipped ' + str(skipped_complete) + ' already complete)' if skipped_complete else ''))
+
+        # --- diagnostic: show which fields are blocking completion ---
+        print('  Missing field breakdown (why records are incomplete):')
+        for f in _ENRICH_FIELDS:
+            cnt = field_missing_counts[f]
+            if cnt:
+                bar = int(cnt / total_incomplete * 20)
+                print('    {:20s} {:6d}  [{}{}]'.format(
+                    f, cnt, '#' * bar, '.' * (20 - bar)))
+
+        # --- checkpoint: load previously processed paths ---
+        ck_path = _enrich_checkpoint_path(config)
+        done_paths = _load_enrich_checkpoint(ck_path)
+        if done_paths:
+            before = len(files)
+            files = [f for f in files if _norm_path(f) not in done_paths]
+            skipped_ck = before - len(files)
+            print('  Checkpoint skip: ' + str(skipped_ck) + ' already processed, '
+                  + str(len(files)) + ' remaining')
+            if not files:
+                print('  All files already processed per checkpoint.')
+                ans = input('  Clear checkpoint and re-enrich all? (yes/no): ').strip().lower()
+                if ans == 'yes':
+                    _clear_enrich_checkpoint(ck_path)
+                    files = sorted(set(
+                        str(rec.get('full_path') or '').strip()
+                        for rec in existing
+                        if str(rec.get('full_path') or '').strip()
+                        and Path(str(rec.get('full_path') or '').strip()).is_file()
+                        and not _is_complete(rec)
+                    ))
+                    done_paths = set()
+                    print('  Checkpoint cleared — re-enriching ' + str(len(files)) + ' files.')
+                else:
+                    return
+
+        total = len(files)
         print('  Mode: fill missing fields only; global checkpoint is ignored.')
         if input('  Proceed? (yes/no): ').strip().lower() != 'yes':
             print('  Cancelled')
@@ -650,6 +753,7 @@ def task_enrich_metadata(config, logger):
         interval = max(1, interval)
         pending = []
         enriched = []
+        done_this_run = set()
 
         def flush(force=False):
             nonlocal pending
@@ -663,6 +767,8 @@ def task_enrich_metadata(config, logger):
                 md_store.rebuild_index()
             except Exception:
                 pass
+            # persist checkpoint after every successful flush
+            _save_enrich_checkpoint(ck_path, done_paths | done_this_run)
             pending = []
 
         def on_record(fresh):
@@ -670,6 +776,7 @@ def task_enrich_metadata(config, logger):
             merged = _merge_missing_record(by_path.get(key, {}), fresh)
             pending.append(merged)
             enriched.append(merged)
+            done_this_run.add(key)
             done = len(enriched)
             if done % interval == 0:
                 flush(force=True)
@@ -682,6 +789,18 @@ def task_enrich_metadata(config, logger):
             md_store.upsert_records(_with_scan_defaults(enriched))
             md_store.rebuild_index()
             save_bk(md_store.load_records(exclude_missing=False), config)
+
+        all_done = done_paths | done_this_run
+        if len(all_done) >= total_incomplete:
+            # every incomplete file has been attempted — clear the checkpoint
+            _clear_enrich_checkpoint(ck_path)
+            print('  Enrich complete — checkpoint cleared.')
+        else:
+            _save_enrich_checkpoint(ck_path, all_done)
+            remaining = total_incomplete - len(all_done)
+            print('  Checkpoint saved (' + str(len(all_done)) + ' done, '
+                  + str(remaining) + ' remaining — resume by re-running option 22).')
+
         print('  Enriched metadata records: ' + str(len(enriched)))
     except Exception as e:
         logger.error('Enrich metadata: %s', e, exc_info=True)
@@ -701,7 +820,7 @@ def task_2(ep, config, logger):
     print('\n  APPLY EXCEL DELETE ACTIONS (QUARANTINE)')
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(ep)
+        wb = openpyxl.load_workbook(ep, read_only=True, data_only=True)
         print('  Select sheet actions to apply:')
         print('  1. Duplicates sheet (default)')
         print('  2. Similar Images sheet')
@@ -767,7 +886,7 @@ def task_2(ep, config, logger):
         print('  Files will be moved to quarantine, not permanently deleted.')
         if input('  Confirm quarantine? (yes/no): ').strip().lower() != 'yes':
             return
-        stats = quarantine_media_cascade(config.to_dict(), list(uniq.values()))
+        stats = quarantine_files_fast(config.to_dict(), list(uniq.values()))
         print(
             '  Images moved: ' + str(stats['files_moved'])
             + ' | missing: ' + str(stats['files_missing'])
@@ -779,13 +898,21 @@ def task_2(ep, config, logger):
         )
         print('  Quarantine folder: ' + str(stats.get('quarantine_root', '')))
         print('  Manifest: ' + str(stats.get('manifest_path', '')))
-        print('  Rechecking duplicates across remaining metadata...')
-        _recompute_duplicate_metadata(config)
-        dedupe_vault(config.to_dict(), quiet=True)
-        auto_reconcile_if_enabled(config.to_dict(), 'after quarantine')
-        records = MetadataStore(config.to_dict()).load_records()
-        if records:
-            save_bk(records, config)
+        print()
+        print('  ' + '=' * 54)
+        print('  FILES QUARANTINED SUCCESSFULLY')
+        print('  ' + '-' * 54)
+        print('  To keep your vault clean, run these two options next:')
+        print()
+        print('    24  Dedupe Vault')
+        print('        Removes orphaned metadata JSON files whose')
+        print('        images were just quarantined.')
+        print()
+        print('    31  Generate / Refresh Excel')
+        print('        Rebuilds the Excel report from the updated vault.')
+        print()
+        print('  Recommended order:  32  ->  24  ->  31')
+        print('  ' + '=' * 54)
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -865,6 +992,8 @@ def task_3(ep, config, logger):
         records = MetadataStore(config.to_dict()).load_records()
         if records:
             save_bk(records, config)
+        if s > 0:
+            print('  Note: face index paths are now stale — run option 51 to rebuild.')
     except Exception as e:
         print('  Error: ' + str(e))
 
@@ -889,7 +1018,7 @@ def task_6(config, logger):
     print('  ' + '-' * 38)
     try:
         md_store = MetadataStore(config.to_dict())
-        records = md_store.load_records()
+        records = md_store.load_records(exclude_missing=False)
         if not records:
             records = load_bk(config)
         if not records:
@@ -898,7 +1027,15 @@ def task_6(config, logger):
 
         fi = FaceIndexer(config.to_dict())
         matches = fi.find_person()
-        untagged_root = Path(config.get('faces.untagged_root'))
+        untagged_root_raw = str(config.get('faces.untagged_root') or '').strip()
+        if not untagged_root_raw:
+            print('  Warning: faces.untagged_root not configured — untagged export disabled.')
+            export_ut = False
+        else:
+            export_ut = config.get('faces.export_untagged', True)
+            if isinstance(export_ut, str):
+                export_ut = export_ut.strip().lower() in ('1', 'true', 'yes', 'on')
+        untagged_root = Path(untagged_root_raw) if untagged_root_raw else Path('.')
         try:
             ums = int(config.get('faces.untagged_max_samples', 1) or 1)
         except (TypeError, ValueError):
@@ -907,9 +1044,6 @@ def task_6(config, logger):
         pick_q = config.get('faces.untagged_pick_best_quality', True)
         if isinstance(pick_q, str):
             pick_q = pick_q.strip().lower() in ('1', 'true', 'yes', 'on')
-        export_ut = config.get('faces.export_untagged', True)
-        if isinstance(export_ut, str):
-            export_ut = export_ut.strip().lower() in ('1', 'true', 'yes', 'on')
         known, unknown = sync_people_tags(
             records,
             matches,
@@ -935,7 +1069,7 @@ def task_7(config, logger):
     print('  ' + '-' * 38)
     try:
         md_store = MetadataStore(config.to_dict())
-        records = md_store.load_records()
+        records = md_store.load_records(exclude_missing=False)
         if not records:
             records = load_bk(config)
         if not records:
@@ -979,6 +1113,7 @@ def task_convert_structure(config, logger):
         return
     ImageOrganizer.convert_structure(source, target, target_folder)
     auto_reconcile_if_enabled(config.to_dict(), 'after convert structure')
+    print('  Note: face index paths are now stale — run option 51 to rebuild.')
 
 
 def task_merge_dates(config, logger):
