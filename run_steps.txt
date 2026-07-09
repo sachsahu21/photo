@@ -1,31 +1,18 @@
 
-cd to photo folder
-
-pip install pyenv 
-py install 3.12
-
-python -m venv env 
-py -3.12 -m venv venv312
-v3.1\venv312\Scripts\activate
-venv\Scripts\activate
-
-..\v3.1\venv\Scripts\activate 
-deactivate
-
-pip install -r v3.1\requirements.txt
-python main.py
-
-C:\Users\ISSUser\Desktop\Sachin\git\photo\v3.3\reports\image-scan-google-20260504-171110.xlsx
-<!-- -- -->
-
-for v4.1
 py install 3.11
 py -3.11 -m venv .venv311
+
+pip install -r v5.4/requirements.txt
+
+
 .venv311\Scripts\activate
- cd .\v5.2\
+cd .\v5.2\
+
 python main.py
 python -m pip install --upgrade pip setuptools wheel
-pip install -r v4.1/requirements.txt
+pip install -r v5.4/requirements.txt
+
+
 
 --- 
 

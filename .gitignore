@@ -51,3 +51,13 @@ comparisons/
 .venv312/
 .cursor/
 untagged_people/
+
+# Virtual environments inside archive versions
+archive/**/.venv*/
+archive/**/venv/
+archive/**/env/
+
+# Junk at root
+debug-*.log
+image_scan.ipynb
+run_steps.txt
