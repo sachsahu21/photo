@@ -52,7 +52,34 @@ python main.py
 | v5.2    | Locked stable — generate_report, global checkpoint |
 | v5.3    | Identical to v5.2 (doc-only changes) |
 
+## Git tags
+
+Each promoted version is tagged on the commit where it became the root version.
+
+| Tag | What you get |
+|-----|-------------|
+| `v5.4` | Current root state (July 2026) |
+
+### Checking out a tagged version
+```bash
+git checkout v5.4
+```
+
+### Tagging convention for future versions
+Before promoting a new version to root:
+```bash
+# 1. Tag the outgoing version (while it's still root)
+git tag -a v5.4 -m "v5.4 — brief description"
+git push origin v5.4
+
+# 2. Move old root to archive/, promote new version, commit
+# 3. Tag the new version
+git tag -a v6.0 -m "v6.0 — brief description"
+git push origin v6.0
+```
+
 ## When to update this file
 - When `requirements.txt` changes
 - When a new archived version is added
 - When the Python version requirement changes
+- When a new git tag is created
