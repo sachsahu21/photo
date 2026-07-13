@@ -198,9 +198,10 @@ def dedupe_vault(config: Dict[str, Any], *, quiet: bool = False) -> Dict[str, in
     """
     Remove duplicate vault JSON files and rebuild the index.
 
-    Fast path (default): groups by stored full_path — no library walk.
-    Full path (fallback): uses _build_file_index + _resolve_path for moved-file
-    resolution when multiple JSONs share the same MD5 but different stored paths.
+    Groups by stored full_path. Two JSONs with the same full_path key are
+    collapsed into one (true vault redundancy). Exception: if both paths exist
+    on disk and share the same MD5, they are cross-location duplicates — both
+    vault records are preserved so duplicate detection can flag them correctly.
 
     Reads all vault JSONs once in parallel, then reuses the parsed docs
     when rebuilding the index — no second read pass.
@@ -218,8 +219,22 @@ def dedupe_vault(config: Dict[str, Any], *, quiet: bool = False) -> Dict[str, in
         f = doc.get("file") if isinstance(doc.get("file"), dict) else {}
         stored_fp = str(f.get("full_path") or "").strip()
         if stored_fp:
+            fp_path = Path(stored_fp)
+            md5 = _doc_md5(doc)
+            # Two vault JSONs with the same full_path key but BOTH existing on disk
+            # with the same MD5 are cross-location duplicates — keep both records so
+            # duplicate detection can flag them correctly. Only collapse when the
+            # path does not exist (stale/redundant vault entry) or has no MD5.
             key = stored_fp.lower()
-            groups.setdefault(key, []).append((jp, doc, Path(stored_fp) if stored_fp else None))
+            existing_group = groups.get(key)
+            if existing_group and md5 and fp_path.is_file():
+                # Check if the existing group entry also points to a real file with the same MD5
+                ex_jp, ex_doc, ex_res = existing_group[0]
+                ex_md5 = _doc_md5(ex_doc)
+                if ex_md5 == md5 and ex_res is not None and ex_res.is_file() and ex_res != fp_path:
+                    # Genuine cross-location duplicate — use unique key so both records survive
+                    key = stored_fp.lower() + "|" + str(jp)
+            groups.setdefault(key, []).append((jp, doc, fp_path))
         else:
             md5 = _doc_md5(doc)
             if md5:
