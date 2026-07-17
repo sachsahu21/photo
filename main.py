@@ -122,7 +122,7 @@ def _clear_dup_flags(r):
         r['delete_flag'] = 'No'
 
 
-def _recompute_duplicate_metadata(config, new_hashes=None):
+def _recompute_duplicate_metadata(config, new_hashes=None, all_records=None):
     """Recompute duplicate flags across vault records.
 
     Orphaned records (vault JSON exists but file is gone from disk) are excluded
@@ -134,13 +134,19 @@ def _recompute_duplicate_metadata(config, new_hashes=None):
     only records whose hash appears in new_hashes OR whose hash is already in an
     existing duplicate group are recomputed.  This makes repeated scans
     O(new_files) instead of O(all_files).
+
+    When all_records is provided (e.g. already loaded by the caller), the vault
+    load is skipped entirely.  Caller-supplied records are treated as the present
+    set; orphaned records from previous runs are not re-cleaned in this path.
     """
     if not config.get('duplicates.enabled', True):
         return []
     hash_algo = config.get('duplicates.hash_algorithm', 'md5')
     hash_field = hash_algo + '_hash'
     md_store = MetadataStore(config.to_dict())
-    all_records = md_store.load_records(exclude_missing=False)
+
+    if all_records is None:
+        all_records = md_store.load_records(exclude_missing=False)
     if not all_records:
         return []
 
@@ -166,7 +172,9 @@ def _recompute_duplicate_metadata(config, new_hashes=None):
                 'duplicates.selection_criteria', ['quality', 'resolution', 'date', 'size']
             )
         ).mark_duplicates(_with_scan_defaults(present))
-        return md_store.upsert_records(updated + orphaned)
+        # Only write records whose flags changed; unchanged present records skip the write.
+        md_store.upsert_records(updated + orphaned)
+        return updated + orphaned
 
     # Incremental: find hashes that need re-evaluation among present records.
     existing_dup_hashes = {
@@ -180,7 +188,9 @@ def _recompute_duplicate_metadata(config, new_hashes=None):
     unchanged = [r for r in present if str(r.get(hash_field) or '').strip().lower() not in affected_hashes]
 
     if not affected:
-        return md_store.upsert_records(orphaned) if orphaned else all_records
+        if orphaned:
+            md_store.upsert_records(orphaned)
+        return all_records
 
     recomputed = DuplicateHandler(
         hash_algorithm=hash_algo,
@@ -189,7 +199,10 @@ def _recompute_duplicate_metadata(config, new_hashes=None):
         )
     ).mark_duplicates(_with_scan_defaults(affected))
 
-    return md_store.upsert_records(recomputed + unchanged + orphaned)
+    # Only write records that actually changed: recomputed (new dup flags) and
+    # orphaned (flags cleared above). unchanged records are already correct on disk.
+    md_store.upsert_records(recomputed + orphaned)
+    return recomputed + unchanged + orphaned
 
 
 def _make_batch_writer(config):
@@ -200,6 +213,13 @@ def _make_batch_writer(config):
     interval = max(1, interval)
     cfg = config.to_dict()
     md_store = MetadataStore(cfg)
+    # Pre-warm both instance caches before scanning starts so the first 100-file
+    # flush doesn't trigger O(vault_size) disk reads mid-scan (was the hang at 100).
+    if md_store.root.exists() and any(md_store.root.glob("*.json")):
+        print('  Pre-warming vault index cache...')
+        md_store._prewarm_index_cache()
+        md_store._prewarm_md5_index()
+        print('  Vault cache ready.')
     pending = []
     count = 0
 
@@ -211,10 +231,6 @@ def _make_batch_writer(config):
             return
         batch = _with_scan_defaults(list(pending))
         md_store.upsert_records(batch)
-        try:
-            md_store.rebuild_index()
-        except Exception:
-            pass
         print('  Metadata batch saved: ' + str(len(batch)) + ' records')
         pending = []
 
@@ -241,15 +257,24 @@ def _export_missing_metadata_report(config, missing_paths):
     return out
 
 
-def _missing_metadata_paths(records, config):
+def _missing_metadata_paths(scanned, vault_records_or_config):
+    """Return paths in scanned that have no vault record.
+
+    vault_records_or_config: pass the already-loaded vault record list to avoid
+    a redundant load_records() call, or pass a config dict to load from disk.
+    """
     expected = {}
-    for rec in records or []:
+    for rec in scanned or []:
         fp = rec.get('full_path') or rec.get('file_path')
         if fp:
             expected[_norm_path(fp)] = str(fp)
     if not expected:
         return []
-    stored = _record_path_set(MetadataStore(config.to_dict()).load_records())
+    if isinstance(vault_records_or_config, list):
+        vault_records = vault_records_or_config
+    else:
+        vault_records = MetadataStore(vault_records_or_config.to_dict()).load_records()
+    stored = _record_path_set(vault_records)
     return [original for key, original in expected.items() if key not in stored]
 
 
@@ -338,7 +363,19 @@ def task_1(config, logger):
                 r['similar_score'] = ''
                 r['similar_methods'] = ''
         md_store = MetadataStore(config.to_dict())
-        records = md_store.upsert_records(records)
+        # Only re-write records whose dup flags actually changed from the batch-flush
+        # defaults. Non-duplicates already have is_duplicate='No' on disk — skipping
+        # their write halves the I/O on this upsert for typical libraries.
+        _dup_changed = lambda r: (
+            r.get('is_duplicate', 'No') not in ('No', '', None)
+            or r.get('duplicate_group')
+            or r.get('is_best_in_group')
+            or str(r.get('delete_flag', 'No')).strip().lower() == 'yes'
+        )
+        flagged = [r for r in records if _dup_changed(r)]
+        if flagged:
+            updated = {u.get('full_path'): u for u in md_store.upsert_records(flagged)}
+            records = [updated.get(r.get('full_path'), r) for r in records]
         if config.get('duplicates.enabled', True):
             print('  Rechecking duplicates (incremental)...')
             hash_algo = config.get('duplicates.hash_algorithm', 'md5')
@@ -348,13 +385,13 @@ def task_1(config, logger):
                 for r in scanned_records
                 if r.get(hash_field)
             }
-            records = _recompute_duplicate_metadata(config, new_hashes=new_hashes)
+            records = _recompute_duplicate_metadata(config, new_hashes=new_hashes, all_records=records)
         if config.get('metadata.dedupe_after_scan', True):
             dedupe_vault(config.to_dict(), quiet=True)
             records = MetadataStore(config.to_dict()).load_records()
         print('  Metadata JSON: ' + str(len(records)) + ' records')
         save_bk(records, config)
-        missing_paths = _missing_metadata_paths(scanned_records, config)
+        missing_paths = _missing_metadata_paths(scanned_records, records)
         _handle_missing_metadata(missing_paths, config, logger)
         return str(md_store.root)
     except Exception as e:
@@ -563,21 +600,9 @@ def task_reconcile_paths(config, logger):
     print('  ' + '-' * 38)
     try:
         stats = reconcile_vault_paths(config.to_dict())
-        if stats.get('dedupe_removed'):
-            print('  Dedupe removed: ' + str(stats['dedupe_removed']) + ' duplicate json')
-        orphans = stats.get('missing', 0)
-        if orphans > 0:
-            print('  Orphaned records (file not found anywhere): ' + str(orphans))
-            if not sys.stdin.isatty():
-                print('  Non-interactive mode — skipping orphan removal prompt.')
-            else:
-                ans = input('  Remove orphaned vault JSON files? (yes/no): ').strip().lower()
-                if ans == 'yes':
-                    from src.metadata_reconcile import reconcile_vault_paths as _rvp
-                    purge_stats = _rvp(config.to_dict(), remove_missing=True, quiet=True)
-                    print('  Purged ' + str(purge_stats.get('removed', 0)) + ' orphaned vault JSON files.')
-        # Always recompute duplicate flags after reconcile — paths may have changed
-        # or prior flags may be stale from orphaned records that were deleted/quarantined.
+        missing = stats.get('missing', 0)
+        if missing > 0:
+            print('  ' + str(missing) + ' vault JSON(s) not found in any search root — run option 25 to quarantine them.')
         if config.get('duplicates.enabled', True):
             print('  Recomputing duplicate flags...')
             _recompute_duplicate_metadata(config)
@@ -621,8 +646,80 @@ def _generated_quarantine_target(path, workspace_root, protected_roots):
     return rp
 
 
-def task_fresh_restart_metadata(config, logger):
-    print('\n  FRESH RESTART (CLEAR VAULT)')
+def task_quarantine_orphans(config, logger):
+    print('\n  QUARANTINE ORPHANED VAULT JSONs')
+    print('  ' + '-' * 38)
+    try:
+        from src.metadata_reconcile import find_orphaned_vault_jsons
+        from src.vault_maintenance import _quarantine_base, _unique_path, _timestamp, _manifest_path
+        import shutil, csv as _csv
+
+        print('  Finding vault JSONs whose file is not in any search root...')
+        orphans = find_orphaned_vault_jsons(config.to_dict())
+
+        if not orphans:
+            print('  No orphaned vault JSONs found.')
+            return
+
+        print('  Orphaned vault JSONs (' + str(len(orphans)) + '):')
+        for jp in orphans[:20]:
+            print('    ' + str(jp.name))
+        if len(orphans) > 20:
+            print('    ... and ' + str(len(orphans) - 20) + ' more')
+
+        if not sys.stdin.isatty():
+            print('  Non-interactive mode — skipping quarantine.')
+            return
+        ans = input('  Quarantine these ' + str(len(orphans)) + ' orphaned vault JSON(s)? (yes/no): ').strip().lower()
+        if ans != 'yes':
+            print('  Cancelled.')
+            return
+
+        q_base = _quarantine_base(config.to_dict())
+        q_run = _unique_path(q_base / ('orphan-' + _timestamp()))
+        q_run.mkdir(parents=True, exist_ok=True)
+        rows = []
+        moved = 0
+        for jp in orphans:
+            dest = _unique_path(q_run / ('orphan_' + jp.name))
+            row = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'action': 'orphan-quarantine',
+                'original_json_path': str(jp),
+                'quarantine_path': str(dest),
+                'status': '',
+                'error': '',
+            }
+            try:
+                shutil.move(str(jp), str(dest))
+                row['status'] = 'moved'
+                moved += 1
+            except Exception as e:
+                row['status'] = 'error'
+                row['error'] = str(e)
+            rows.append(row)
+
+        manifest = _manifest_path(q_run, 'quarantine-orphan-manifest')
+        fields = ['timestamp', 'action', 'original_json_path', 'quarantine_path', 'status', 'error']
+        with open(manifest, 'w', newline='', encoding='utf-8') as fh:
+            w = _csv.DictWriter(fh, fieldnames=fields, extrasaction='ignore')
+            w.writeheader()
+            w.writerows(rows)
+
+        print('  Quarantined: ' + str(moved) + ' vault JSON(s)')
+        print('  Quarantine folder: ' + str(q_run))
+        print('  Manifest: ' + str(manifest))
+
+        from src.vault_maintenance import rebuild_vault_index
+        rebuild_vault_index(config.to_dict())
+        print('  Vault index rebuilt.')
+    except Exception as e:
+        logger.error('Quarantine orphans: %s', e, exc_info=True)
+        print('  Error: ' + str(e))
+
+
+def task_fresh_start(config, logger):
+    print('\n  FRESH START (FULL RESCAN)')
     print('  ' + '-' * 38)
     try:
         workspace_root = Path(config.get('workspace.root')).expanduser().resolve()
@@ -658,31 +755,35 @@ def task_fresh_restart_metadata(config, logger):
             print('  Nothing safe to quarantine.')
             return
 
-        print('  This moves generated metadata state to quarantine:')
+        print('  This quarantines all generated metadata and runs a fresh scan:')
         for label, target in safe_targets:
             print('  - ' + label + ': ' + str(target))
-        print('  Photos are not deleted from scan or organized folders.')
-        if input('  Type DELETE METADATA to continue: ').strip() != 'DELETE METADATA':
-            print('  Cancelled')
+
+        from src.metadata_reconcile import _search_roots
+        extra_roots = _search_roots(config.to_dict())
+        print('  Scan will cover: ' + ', '.join(str(r) for r in extra_roots))
+        print('  Photos are NOT deleted from scan or organized folders.')
+        if input('  Type FRESH START to continue: ').strip() != 'FRESH START':
+            print('  Cancelled.')
             return
 
         stats = quarantine_generated_targets(
             config.to_dict(),
             safe_targets,
-            action='fresh-restart',
-            manifest_prefix='fresh-restart-manifest',
+            action='fresh-start',
+            manifest_prefix='quarantine-fresh-manifest',
         )
 
         Path(config.get('metadata.root_folder')).mkdir(parents=True, exist_ok=True)
         if checkpoint_file:
             Path(checkpoint_file).parent.mkdir(parents=True, exist_ok=True)
-        print('  Quarantined generated target(s): ' + str(stats.get('moved', 0)))
+        print('  Quarantined: ' + str(stats.get('moved', 0)) + ' item(s)')
         print('  Quarantine folder: ' + str(stats.get('run_root', '')))
         print('  Manifest: ' + str(stats.get('manifest_path', '')))
         print('  Starting fresh scan...')
         return task_1(config, logger)
     except Exception as e:
-        logger.error('Fresh restart metadata: %s', e, exc_info=True)
+        logger.error('Fresh start: %s', e, exc_info=True)
         print('  Error: ' + str(e))
 
 
@@ -947,33 +1048,36 @@ def task_2(ep, config, logger):
                 print('  Sheet not found, skipped: ' + sn)
                 continue
             ws = wb[sn]
-            hdr = {str(c.value).strip().lower(): ci for ci, c in enumerate(ws[1], 1) if c.value}
-            fci = hdr.get('full path') or hdr.get('path')
-            if not fci:
+            # Read header row to build column-name → 0-based index map
+            hdr_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            hdr = {str(v).strip().lower(): i for i, v in enumerate(hdr_row) if v is not None}
+            fci = hdr.get('full path') if hdr.get('full path') is not None else hdr.get('path')
+            if fci is None:
                 continue
             dci = None
             mci = hdr.get('metadata json path')
             midci = hdr.get('media id')
             md5ci = hdr.get('md5 hash')
-            groupci = hdr.get('dup group') or hdr.get('group') or hdr.get('duplicate group')
+            groupci = hdr.get('dup group') if hdr.get('dup group') is not None else (hdr.get('group') if hdr.get('group') is not None else hdr.get('duplicate group'))
             for h, ci in hdr.items():
                 if 'delete' in h:
                     dci = ci
-            if not dci:
+            if dci is None:
                 print('  No DELETE? column, skipped: ' + sn)
                 continue
-            for ri in range(2, ws.max_row + 1):
-                fp = ws.cell(row=ri, column=fci).value
+            # iter_rows with values_only=True is O(n) in read_only mode — no random cell access
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                fp = row[fci] if fci < len(row) else None
                 if not fp:
                     continue
-                delete_flag = ws.cell(row=ri, column=dci).value if dci else ''
-                delete_me = str(delete_flag).strip().lower() in ('yes', 'true', '1')
+                delete_flag = row[dci] if dci < len(row) else ''
+                delete_me = str(delete_flag or '').strip().lower() in ('yes', 'true', '1')
                 if not delete_me:
                     continue
-                mp = ws.cell(row=ri, column=mci).value if mci else ''
-                mid = ws.cell(row=ri, column=midci).value if midci else ''
-                md5 = ws.cell(row=ri, column=md5ci).value if md5ci else ''
-                group = ws.cell(row=ri, column=groupci).value if groupci else ''
+                mp = row[mci] if mci is not None and mci < len(row) else ''
+                mid = row[midci] if midci is not None and midci < len(row) else ''
+                md5 = row[md5ci] if md5ci is not None and md5ci < len(row) else ''
+                group = row[groupci] if groupci is not None and groupci < len(row) else ''
                 targets.append({
                     'full_path': str(fp),
                     'metadata_json_path': str(mp or '').strip(),
@@ -1094,12 +1198,8 @@ def task_3(ep, config, logger):
         s = sum(1 for m in mvs if m['status'] == 'Success')
         e = sum(1 for m in mvs if 'Error' in m['status'])
         print('  Done: ' + str(s) + ' success, ' + str(e) + ' errors')
-        auto_reconcile_if_enabled(config.to_dict(), 'after organize')
-        dedupe_vault(config.to_dict(), quiet=True)
-        records = MetadataStore(config.to_dict()).load_records()
-        if records:
-            save_bk(records, config)
         if s > 0:
+            print('  Note: vault paths are now stale — run Option 23 to reconcile.')
             print('  Note: face index paths are now stale — run option 51 to rebuild.')
     except Exception as e:
         print('  Error: ' + str(e))
@@ -1219,7 +1319,7 @@ def task_convert_structure(config, logger):
         print('  Cancelled')
         return
     ImageOrganizer.convert_structure(source, target, target_folder)
-    auto_reconcile_if_enabled(config.to_dict(), 'after convert structure')
+    print('  Note: vault paths are now stale — run Option 23 to reconcile.')
     print('  Note: face index paths are now stale — run option 51 to rebuild.')
 
 
@@ -1240,7 +1340,7 @@ def task_merge_dates(config, logger):
         print('  Cancelled')
         return
     ImageOrganizer.merge_duplicate_dates(source, structure)
-    auto_reconcile_if_enabled(config.to_dict(), 'after merge same-date')
+    print('  Note: vault paths are now stale — run Option 23 to reconcile.')
 
 
 def task_8(config, logger):
@@ -1320,9 +1420,10 @@ def main():
             print('  ' + '-' * 30)
             print('  21.  Build / Refresh Metadata Vault')
             print('  22.  Enrich existing metadata')
-            print('  23.  Reconcile vault paths')
-            print('  24.  Dedupe metadata files')
-            print('  25.  Fresh restart (clear vault)')
+            print('  23.  Reconcile vault paths (update paths only)')
+            print('  24.  Dedupe vault JSONs (quarantine duplicates)')
+            print('  25.  Quarantine orphaned vault JSONs')
+            print('  26.  Fresh start (quarantine all + full rescan)')
 
             print('')
             print('  3. EXCEL & DATA')
@@ -1365,7 +1466,9 @@ def main():
             elif ch == '24':
                 task_dedupe_vault(config, logger)
             elif ch == '25':
-                task_fresh_restart_metadata(config, logger)
+                task_quarantine_orphans(config, logger)
+            elif ch == '26':
+                task_fresh_start(config, logger)
             elif ch == '31':
                 last_excel = task_1b(config, logger) or last_excel
             elif ch == '32':

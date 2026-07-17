@@ -131,18 +131,11 @@ def _normalize_unaligned_folder_name(folder_path):
     if actual_count < 0:
         return None
     m = RE_PIC.match(old_name)
-    if m:
-        new_name = m.group(1) + '-' + format_pic_count(actual_count) + m.group(3)
-    else:
-        if '-' in old_name:
-            prefix, suffix = old_name.split('-', 1)
-            suffix = suffix.strip()
-            if suffix:
-                new_name = prefix.strip() + '-' + format_pic_count(actual_count) + '-' + suffix
-            else:
-                new_name = prefix.strip() + '-' + format_pic_count(actual_count)
-        else:
-            new_name = old_name.strip() + '-' + format_pic_count(actual_count)
+    if not m:
+        # Only rename folders that already have the Npic pattern (day-level folders).
+        # year-text folders like "2024-SG" are user-named — leave them alone.
+        return None
+    new_name = m.group(1) + '-' + format_pic_count(actual_count) + m.group(3)
     if not new_name or new_name == old_name:
         return None
     new_path = folder_path.parent / new_name
@@ -406,7 +399,12 @@ class ImageOrganizer:
         daily = set()
         monthly = defaultdict(list)
         for dk, c in dc.items():
-            if c >= self.day_thr:
+            # Include files already in the organized folder for this date so that
+            # multi-run organizing doesn't split a day across daily and monthly folders.
+            ds = dk[:4] + '-' + dk[4:6] + '-' + dk[6:8]
+            ex = self._find_ex(ds)
+            existing_count = ex.get('count', 0) if ex else 0
+            if (c + existing_count) >= self.day_thr:
                 daily.add(dk)
             else:
                 monthly[dk[:6]].extend(dr[dk])
@@ -503,7 +501,6 @@ class ImageOrganizer:
                 shutil.move(str(source), str(dest))
             else:
                 shutil.copy2(str(source), str(dest))
-            self._sync_metadata_json(rec, dest)
             return {'filename': source.name, 'source': str(source), 'destination': str(dest), 'status': 'Success', 'folder': fl}
         except Exception as e:
             return {'filename': source.name, 'source': str(source), 'destination': str(dest), 'status': 'Error: ' + str(e), 'folder': fl}
@@ -581,23 +578,37 @@ class ImageOrganizer:
 
     def _report(self, mv):
         try:
+            ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            ts_file = datetime.now().strftime('%Y%m%d_%H%M%S')
+            s = sum(1 for m in mv if m['status'] == 'Success')
+            skipped = sum(1 for m in mv if m['status'] == 'Skipped')
+            not_found = sum(1 for m in mv if m['status'] == 'Error: Not found')
+            other_errors = sum(1 for m in mv if 'Error' in m['status'] and m['status'] != 'Error: Not found')
             lines = [
                 'Organization Report', '=' * 60,
-                'Generated: ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'Generated: ' + ts,
                 'Structure: ' + self.structure,
-                'Operation: ' + self.op, ''
+                'Operation: ' + self.op, '',
+                'Success:       ' + str(s),
+                'Skipped:       ' + str(skipped),
+                'Not found:     ' + str(not_found),
+                'Other errors:  ' + str(other_errors),
+                'Total:         ' + str(len(mv)),
+                '', 'FOLDERS:'
             ]
-            s = sum(1 for m in mv if m['status'] == 'Success')
-            e = sum(1 for m in mv if 'Error' in m['status'])
-            lines.extend(['Success: ' + str(s), 'Errors: ' + str(e), 'Total: ' + str(len(mv)), '', 'FOLDERS:'])
             fc = defaultdict(int)
             for m in mv:
                 if m['status'] == 'Success':
                     fc[m['folder']] += 1
             for f in sorted(fc):
                 lines.append('  ' + f + ': ' + str(fc[f]))
-            with open(self.output / 'organization-report.txt', 'w', encoding='utf-8') as f:
+            if not_found:
+                lines += ['', 'NOT FOUND (vault paths stale — run Option 23):',
+                          '  ' + str(not_found) + ' file(s) missing from disk']
+            filename = 'organization-report-' + ts_file + '.txt'
+            with open(self.output / filename, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(lines))
+            print('  Report: ' + str(self.output / filename))
         except Exception:
             pass
 
@@ -926,6 +937,40 @@ def _extract_folder_info(item):
     return None
 
 
+def _files_identical(a: Path, b: Path) -> bool:
+    """True if two files have the same size and MD5 — cheap size check first."""
+    try:
+        if a.stat().st_size != b.stat().st_size:
+            return False
+        import hashlib
+        def _md5(p):
+            h = hashlib.md5()
+            with open(p, 'rb') as f:
+                for chunk in iter(lambda: f.read(65536), b''):
+                    h.update(chunk)
+            return h.digest()
+        return _md5(a) == _md5(b)
+    except Exception:
+        return False
+
+
+def _move_file_no_overwrite(src: Path, dest_dir: Path):
+    """Move src into dest_dir. Skip if identical file already exists; rename with counter otherwise."""
+    target = dest_dir / src.name
+    if target.exists():
+        if _files_identical(src, target):
+            src.unlink()
+            return
+        stem, suffix = src.stem, src.suffix
+        for i in range(1, 100000):
+            alt = dest_dir / (stem + '-' + str(i) + suffix)
+            if not alt.exists():
+                shutil.move(str(src), str(alt))
+                return
+    else:
+        shutil.move(str(src), str(target))
+
+
 def _merge_folders(old_path, new_path):
     old_path = Path(old_path)
     new_path = Path(new_path)
@@ -934,17 +979,7 @@ def _merge_folders(old_path, new_path):
         if item.is_dir():
             if target_item.exists():
                 for sub in item.iterdir():
-                    st = target_item / sub.name
-                    if not st.exists():
-                        shutil.move(str(sub), str(st))
-                    else:
-                        stem = sub.stem
-                        suffix = sub.suffix
-                        for i in range(1, 100000):
-                            alt = target_item / (stem + '-' + str(i) + suffix)
-                            if not alt.exists():
-                                shutil.move(str(sub), str(alt))
-                                break
+                    _move_file_no_overwrite(sub, target_item)
                 try:
                     if not any(item.iterdir()):
                         item.rmdir()
@@ -953,16 +988,7 @@ def _merge_folders(old_path, new_path):
             else:
                 shutil.move(str(item), str(target_item))
         else:
-            if not target_item.exists():
-                shutil.move(str(item), str(target_item))
-            else:
-                stem = item.stem
-                suffix = item.suffix
-                for i in range(1, 100000):
-                    alt = new_path / (stem + '-' + str(i) + suffix)
-                    if not alt.exists():
-                        shutil.move(str(item), str(alt))
-                        break
+            _move_file_no_overwrite(item, new_path)
     try:
         if old_path.exists() and not any(old_path.iterdir()):
             old_path.rmdir()

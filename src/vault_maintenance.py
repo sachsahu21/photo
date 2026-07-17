@@ -240,24 +240,48 @@ def dedupe_vault(config: Dict[str, Any], *, quiet: bool = False) -> Dict[str, in
             if md5:
                 orphan_md5.setdefault(md5, []).append((jp, doc))
 
+    q_base = _quarantine_base(config)
+    q_run: Optional[Path] = None
+    manifest_rows: List[Dict[str, Any]] = []
+
+    def _quarantine_json(jp: Path, doc: Dict[str, Any], reason: str) -> bool:
+        nonlocal q_run
+        if q_run is None:
+            q_run = _unique_path(q_base / ("dedupe-" + _timestamp()))
+            q_run.mkdir(parents=True, exist_ok=True)
+        dest = _unique_path(q_run / ("dedupe_" + jp.name))
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(jp), str(dest))
+            f = doc.get("file") if isinstance(doc.get("file"), dict) else {}
+            manifest_rows.append({
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "action": "dedupe",
+                "reason": reason,
+                "original_json_path": str(jp),
+                "quarantine_path": str(dest),
+                "full_path": str(f.get("full_path") or ""),
+                "md5": _doc_md5(doc),
+            })
+            return True
+        except OSError as e:
+            logger.debug("Dedupe quarantine %s: %s", jp, e)
+            return False
+
     removed = 0
     group_count = 0
-    deleted_paths: Set[str] = set()
+    quarantined_paths: Set[str] = set()
 
     for _key, items in groups.items():
         if len(items) < 2:
             continue
         group_count += 1
-        stored_path = items[0][2]
         items.sort(key=lambda t: _score_keeper(t[1], t[0], t[2], config), reverse=True)
         keeper_jp, keeper_doc, keeper_res = items[0]
         for jp, doc, _res in items[1:]:
-            try:
-                jp.unlink()
+            if _quarantine_json(jp, doc, "duplicate-full-path"):
                 removed += 1
-                deleted_paths.add(str(jp))
-            except OSError as e:
-                logger.debug("Dedupe unlink %s: %s", jp, e)
+                quarantined_paths.add(str(jp))
         if keeper_res is not None:
             try:
                 from .metadata_paths import apply_media_path_to_doc
@@ -275,16 +299,22 @@ def dedupe_vault(config: Dict[str, Any], *, quiet: bool = False) -> Dict[str, in
             continue
         group_count += 1
         items.sort(key=lambda t: _doc_updated_at(t[1]), reverse=True)
-        for jp, _doc in items[1:]:
-            try:
-                jp.unlink()
+        for jp, doc in items[1:]:
+            if _quarantine_json(jp, doc, "duplicate-md5-no-path"):
                 removed += 1
-                deleted_paths.add(str(jp))
-            except OSError:
-                pass
+                quarantined_paths.add(str(jp))
+
+    if q_run and manifest_rows:
+        manifest = _manifest_path(q_run, "quarantine-dedupe-manifest")
+        import csv as _csv
+        fields = ["timestamp", "action", "reason", "original_json_path", "quarantine_path", "full_path", "md5"]
+        with open(manifest, "w", newline="", encoding="utf-8") as fh:
+            w = _csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(manifest_rows)
 
     # reuse already-parsed docs — skip second read pass
-    surviving = [(jp, doc) for jp, doc in parsed if str(jp) not in deleted_paths]
+    surviving = [(jp, doc) for jp, doc in parsed if str(jp) not in quarantined_paths]
     rebuild_vault_index(config, parsed=surviving)
 
     stats = {"groups": group_count, "removed": removed, "kept": len(groups) + len(orphan_md5) - removed}
@@ -294,7 +324,8 @@ def dedupe_vault(config: Dict[str, Any], *, quiet: bool = False) -> Dict[str, in
             + str(group_count)
             + " duplicate groups, "
             + str(removed)
-            + " json removed"
+            + " json quarantined"
+            + (" → " + str(q_run) if q_run else "")
         )
     return stats
 
@@ -407,16 +438,18 @@ def remove_face_index_paths(config: Dict[str, Any], paths: List[str]) -> int:
         con = sqlite3.connect(str(fi.index_db))
         n = 0
         try:
-            for pk in paths_norm:
-                cur = con.execute("SELECT path FROM files")
-                for (stored,) in cur.fetchall():
-                    try:
-                        if _path_key(Path(stored)) == pk:
-                            con.execute("DELETE FROM faces WHERE file_path = ?", (stored,))
-                            con.execute("DELETE FROM files WHERE path = ?", (stored,))
-                            n += 1
-                    except OSError:
-                        continue
+            # Build normalised key → stored path map in one pass, then batch delete.
+            stored_map = {}
+            for (stored,) in con.execute("SELECT path FROM files").fetchall():
+                try:
+                    stored_map[_path_key(Path(stored))] = stored
+                except OSError:
+                    pass
+            to_delete = [stored_map[pk] for pk in paths_norm if pk in stored_map]
+            for stored in to_delete:
+                con.execute("DELETE FROM faces WHERE file_path = ?", (stored,))
+                con.execute("DELETE FROM files WHERE path = ?", (stored,))
+                n += 1
         finally:
             con.commit()
             con.close()

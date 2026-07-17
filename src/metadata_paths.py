@@ -122,6 +122,16 @@ def apply_media_path_to_doc(
         except ValueError:
             rel_str = ""
 
+    # When library_root is not set, recompute relative_path from scan_root so
+    # stale paths (from a previous scan with a different scan_root) get corrected.
+    if not rel_str:
+        scan_root = get_scan_root(config)
+        if scan_root:
+            try:
+                rel_str = media.relative_to(scan_root.resolve()).as_posix()
+            except ValueError:
+                rel_str = ""
+
     old_abs = str(f.get("full_path", "") or "")
     old_rel = str(f.get("relative_path", "") or "")
     old_folder = str(f.get("folder", "") or "")
@@ -133,6 +143,7 @@ def apply_media_path_to_doc(
         or old_org != abs_str
         or (rel_str and old_rel != rel_str)
         or (rel_str and not old_rel)
+        or (not rel_str and old_rel)  # stale relative_path that now resolves to nothing
     )
     if not changed:
         return False
@@ -146,12 +157,17 @@ def apply_media_path_to_doc(
         doc["file"]["filename"] = media.name
     if rel_str:
         doc["file"]["relative_path"] = rel_str
+    elif old_rel:
+        # Clear stale relative_path — file is no longer under any known root
+        doc["file"]["relative_path"] = ""
 
     if isinstance(rec, dict):
         rec["full_path"] = abs_str
         rec["folder"] = folder
         if rel_str:
             rec["relative_path"] = rel_str
+        elif old_rel:
+            rec["relative_path"] = ""
         doc["record"] = rec
 
     if json_path is not None:

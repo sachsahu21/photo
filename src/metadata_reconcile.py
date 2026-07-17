@@ -45,6 +45,11 @@ def _search_roots(config: Dict[str, Any]) -> List[Path]:
         roots.append(org)
     if scan and scan not in roots:
         roots.append(scan)
+    extras = (config.get("metadata") or {}).get("extra_search_roots") or []
+    for raw in extras:
+        p = Path(str(raw)).expanduser().resolve()
+        if p not in roots and p.is_dir():
+            roots.append(p)
     return roots
 
 
@@ -203,19 +208,16 @@ def _resolve_path(
 def reconcile_vault_paths(
     config: Dict[str, Any],
     *,
-    remove_missing: Optional[bool] = None,
     quiet: bool = False,
 ) -> Dict[str, int]:
+    """Update full_path/relative_path in vault JSONs. Never deletes, never dedupes."""
     store = MetadataStore(config)
-    meta_cfg = config.get("metadata") or {}
-    if remove_missing is None:
-        remove_missing = bool(meta_cfg.get("reconcile_remove_missing", False))
 
     roots = _search_roots(config)
     if not roots:
         if not quiet:
             print("  Reconcile: no search roots (set scan.folder_path and/or organization.output_folder)")
-        return {"updated": 0, "unchanged": 0, "missing": 0, "removed": 0}
+        return {"updated": 0, "unchanged": 0, "missing": 0}
 
     if not quiet:
         print("  Vault: " + str(store.root))
@@ -230,7 +232,7 @@ def reconcile_vault_paths(
     exts = _media_extensions(config)
     by_name, by_name_size = _build_file_index(roots, exts)
 
-    stats = {"updated": 0, "unchanged": 0, "missing": 0, "removed": 0}
+    stats: Dict[str, int] = {"updated": 0, "unchanged": 0, "missing": 0}
     if store.load_recursive:
         json_paths = sorted(
             p for p in store.root.rglob("*.json") if p.name != store.index_path.name
@@ -252,12 +254,6 @@ def reconcile_vault_paths(
         resolved = _resolve_path(doc, by_name, by_name_size, config)
         if resolved is None:
             stats["missing"] += 1
-            if remove_missing:
-                try:
-                    jp.unlink()
-                    stats["removed"] += 1
-                except OSError:
-                    pass
             continue
 
         if apply_media_path_to_doc(doc, resolved, config, jp):
@@ -269,30 +265,67 @@ def reconcile_vault_paths(
             stats["unchanged"] += 1
 
     if not quiet:
-        msg = (
+        print(
             "  Path reconcile: "
             + str(stats["updated"]) + " updated, "
             + str(stats["unchanged"]) + " ok, "
             + str(stats["missing"]) + " not found"
         )
-        if stats["removed"]:
-            msg += ", " + str(stats["removed"]) + " json removed"
-        print(msg)
 
-    from .vault_maintenance import dedupe_vault, rebuild_vault_index
-
-    if bool(meta_cfg.get("dedupe_on_reconcile", True)):
-        dedupe_stats = dedupe_vault(config, quiet=quiet)
-        stats["dedupe_removed"] = dedupe_stats.get("removed", 0)
-    else:
-        rebuild_vault_index(config)
+    from .vault_maintenance import rebuild_vault_index
+    rebuild_vault_index(config)
     return stats
+
+
+def find_orphaned_vault_jsons(
+    config: Dict[str, Any],
+    *,
+    quiet: bool = False,
+) -> List[Path]:
+    """Return list of vault JSON paths whose media file cannot be found in any search root."""
+    store = MetadataStore(config)
+
+    roots = _search_roots(config)
+    if not roots:
+        if not quiet:
+            print("  Orphan search: no search roots configured.")
+        return []
+
+    if not quiet:
+        print("  Searching: " + ", ".join(str(r) for r in roots))
+
+    exts = _media_extensions(config)
+    by_name, by_name_size = _build_file_index(roots, exts)
+
+    if store.load_recursive:
+        json_paths = sorted(
+            p for p in store.root.rglob("*.json") if p.name != store.index_path.name
+        )
+    else:
+        json_paths = sorted(store.root.glob("*.json"))
+
+    orphans: List[Path] = []
+    for jp in json_paths:
+        if jp.name == store.index_path.name:
+            continue
+        try:
+            doc = json.loads(jp.read_text(encoding="utf-8"))
+        except Exception:
+            orphans.append(jp)
+            continue
+        if not isinstance(doc, dict):
+            continue
+        resolved = _resolve_path(doc, by_name, by_name_size, config)
+        if resolved is None:
+            orphans.append(jp)
+
+    return orphans
 
 
 def auto_reconcile_if_enabled(config: Dict[str, Any], reason: str = "") -> Dict[str, int]:
     meta = config.get("metadata") or {}
     if not meta.get("auto_reconcile_paths", True):
-        return {"updated": 0, "unchanged": 0, "missing": 0, "removed": 0}
+        return {"updated": 0, "unchanged": 0, "missing": 0}
     if reason:
         print("  Auto path reconcile (" + reason + ")...")
     return reconcile_vault_paths(config, quiet=not bool(reason))

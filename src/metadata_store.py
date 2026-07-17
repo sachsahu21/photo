@@ -195,6 +195,49 @@ class MetadataStore:
         self.index_path = self.root / "metadata-index.json"
         # When true, load_records() walks subfolders under root (e.g. legacy nested .../metadata/*.json).
         self.load_recursive = bool(meta_cfg.get("load_recursive", False))
+        # md5 → vault JSON path cache; built lazily on first path-hash miss,
+        # persisted across upsert_records calls on the same instance so batch
+        # flushes don't rebuild it from disk on every call.
+        self._md5_index: Optional[Dict[str, Path]] = None
+        # metadata-index.json contents cached as a dict; loaded once on first
+        # upsert_records call and updated in-memory on every subsequent flush,
+        # avoiding an O(index_size) disk read on every 100-file batch flush.
+        self._index_cache: Optional[Dict[str, Dict[str, Any]]] = None
+
+    def _prewarm_md5_index(self) -> None:
+        """Build the md5→vault-JSON path cache from disk (idempotent; no-op if already built)."""
+        if self._md5_index is not None:
+            return
+        self._md5_index = {}
+        for jf in self.root.glob("*.json"):
+            if jf == self.index_path:
+                continue
+            try:
+                d = json.loads(jf.read_text(encoding="utf-8"))
+                mid = str(
+                    d.get("media_id")
+                    or (d.get("hashes") or {}).get("md5")
+                    or (d.get("file") or {}).get("md5_hash")
+                    or ""
+                ).strip().lower()
+                if mid:
+                    self._md5_index[mid] = jf
+            except Exception:
+                pass
+
+    def _prewarm_index_cache(self) -> None:
+        """Load metadata-index.json into instance cache (idempotent; no-op if already loaded)."""
+        if self._index_cache is not None:
+            return
+        self._index_cache = {}
+        if self.index_path.exists():
+            try:
+                for entry in json.loads(self.index_path.read_text(encoding="utf-8")):
+                    key = str(entry.get("metadata_json_path", ""))
+                    if key:
+                        self._index_cache[key] = entry
+            except Exception:
+                pass
 
     def _json_path_for_record(self, rec: Dict[str, Any]) -> Path:
         src = str(rec.get("full_path", "")).strip()
@@ -451,6 +494,7 @@ class MetadataStore:
                 "duplicate_confidence": rec.get("duplicate_confidence"),
                 "is_best_in_group": rec.get("is_best_in_group"),
                 "recommendation": rec.get("recommendation"),
+                "delete_flag": rec.get("delete_flag", "No"),
             }
         )
         base["similarity"] = _ensure_json_serializable(
@@ -689,6 +733,7 @@ class MetadataStore:
             "duplicate_confidence": dup.get("duplicate_confidence"),
             "is_best_in_group": dup.get("is_best_in_group") or rec.get("is_best_in_group", ""),
             "recommendation": dup.get("recommendation") or rec.get("recommendation", ""),
+            "delete_flag": dup.get("delete_flag") or rec.get("delete_flag", "No"),
             "is_similar": _yes_no(_coalesce(sim.get("is_similar"), k.get("is_similar"), rec.get("is_similar"), "No")),
             "similar_group": sim.get("similar_group") or rec.get("similar_group", ""),
             "similar_score": sim.get("similarity_score") or rec.get("similar_score", ""),
@@ -760,16 +805,10 @@ class MetadataStore:
         return records
 
     def upsert_records(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Load existing index so batch flushes accumulate rather than truncate.
-        index_by_path: Dict[str, Dict[str, Any]] = {}
-        if self.index_path.exists():
-            try:
-                for entry in json.loads(self.index_path.read_text(encoding="utf-8")):
-                    key = str(entry.get("metadata_json_path", ""))
-                    if key:
-                        index_by_path[key] = entry
-            except Exception:
-                pass
+        # Use instance-level index cache so repeated batch flushes don't re-read
+        # metadata-index.json from disk on every call (avoids O(index_size) reads
+        # per 100-file flush which caused the option-21 "hang at 100 files").
+        self._prewarm_index_cache()
 
         out = []
         for rec in records or []:
@@ -780,6 +819,25 @@ class MetadataStore:
                     existing = json.loads(jp.read_text(encoding="utf-8"))
                 except Exception:
                     existing = None
+
+            # Path-hash miss: check if this file was previously stored under a
+            # different path-hash (e.g. moved from scan folder to organized folder).
+            if existing is None:
+                rec_md5 = str(rec.get("md5_hash", "") or "").strip().lower()
+                if rec_md5:
+                    # _prewarm_md5_index is idempotent; only does disk work once per instance.
+                    self._prewarm_md5_index()
+                    old_jp = self._md5_index.get(rec_md5)
+                    if old_jp and old_jp != jp and old_jp.exists():
+                        try:
+                            existing = json.loads(old_jp.read_text(encoding="utf-8"))
+                            # Migrate: delete old path-hash file; write will go to new jp.
+                            old_jp.unlink(missing_ok=True)
+                            self._md5_index.pop(rec_md5, None)
+                            # Remove stale entry from instance cache.
+                            self._index_cache.pop(str(old_jp), None)
+                        except Exception:
+                            existing = None
 
             strat = self.strategy
             if strat == "skip_if_present" and existing is not None:
@@ -800,7 +858,11 @@ class MetadataStore:
             jp.write_text(json.dumps(doc, separators=(",", ":"), ensure_ascii=True), encoding="utf-8")
             normalized = self._doc_to_record(doc, jp)
             out.append(normalized)
-            index_by_path[str(jp)] = {
+            # Keep instance-level caches current so the next batch flush is O(batch_size).
+            _rec_md5 = str(rec.get("md5_hash", "") or "").strip().lower()
+            if _rec_md5 and self._md5_index is not None:
+                self._md5_index[_rec_md5] = jp
+            self._index_cache[str(jp)] = {
                 "full_path": normalized.get("full_path", ""),
                 "metadata_json_path": str(jp),
                 "schema_version": doc.get("schema_version", self.schema_version),
@@ -809,7 +871,7 @@ class MetadataStore:
 
         # Write the full accumulated index (compact JSON for smaller file).
         self.index_path.write_text(
-            json.dumps(list(index_by_path.values()), separators=(",", ":"), ensure_ascii=True),
+            json.dumps(list(self._index_cache.values()), separators=(",", ":"), ensure_ascii=True),
             encoding="utf-8",
         )
         return out

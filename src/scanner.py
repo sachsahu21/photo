@@ -261,8 +261,20 @@ class ImageScanner:
         if processed_set:
             files = [f for f in files if str(f) not in processed_set]
 
-        if batch_callback is None and self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
-            records = self._scan_parallel(files, checkpoint)
+        if self.parallel_workers != 1 and len(files) > 50 and not self.fast_mode:
+            import threading
+            _lock = threading.Lock()
+
+            def _parallel_cb(rec):
+                fp = rec.get('full_path') or rec.get('file_path')
+                if checkpoint and fp:
+                    with _lock:
+                        checkpoint.mark_processed(str(fp))
+                if batch_callback is not None:
+                    with _lock:
+                        batch_callback(rec)
+
+            records = self._scan_parallel_with_callback(files, _parallel_cb)
         else:
             records = self._scan_sequential(files, checkpoint, batch_callback=batch_callback)
         # After scanning, update global checkpoint with newly processed files
