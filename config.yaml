@@ -51,11 +51,11 @@ scan:
       - vob
 
 organization:
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\sachin_organized"
   # flat | year | year-month-date
   folder_structure: "year"
   # copy = keep originals; move = relocate into organized tree
-  operation: "move"
+  operation: "copy"
   retire_scan_path_json_on_organize: true
   # rename | skip | overwrite when filename exists
   conflict_resolution: "overwrite"

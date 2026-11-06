@@ -322,6 +322,22 @@ def task_1(config, logger):
     print('  ' + '-' * 38)
     records = None
     try:
+        # Prune global checkpoint entries whose vault JSON no longer exists.
+        # This re-enables scanning for files that were lost/deleted from the vault
+        # so the next run picks them up instead of skipping them forever.
+        gcp_path = (config.to_dict().get('processing') or {}).get('global_checkpoint_file') or ''
+        if gcp_path:
+            from src.global_checkpoint import prune_global_checkpoint, rebuild_checkpoint_from_vault, load_global_checkpoint
+            pruned = prune_global_checkpoint(gcp_path, config.to_dict())
+            if pruned:
+                print('  Checkpoint: removed ' + str(pruned) + ' stale entr' + ('y' if pruned == 1 else 'ies') + ' (vault JSON missing)')
+            # If checkpoint is now empty but vault JSONs exist, rebuild from vault
+            # so the scanner skips files already on disk instead of re-scanning them.
+            cp_count = len(load_global_checkpoint(gcp_path).get('processed', []))
+            if cp_count == 0:
+                rebuilt = rebuild_checkpoint_from_vault(gcp_path, config.to_dict())
+                if rebuilt:
+                    print('  Checkpoint: rebuilt ' + str(rebuilt) + ' entr' + ('y' if rebuilt == 1 else 'ies') + ' from existing vault JSONs (skipping re-scan)')
         scanner = ImageScanner(config.to_dict())
         sf = config.get('scan.folder_path')
         print('  Scanning: ' + str(sf))
@@ -869,6 +885,27 @@ def task_enrich_metadata(config, logger):
             if has_exif is not None and not has_exif:
                 return all(not _missing_value(rec.get(f)) for f in _ALWAYS_COMPUTABLE)
             return all(not _missing_value(rec.get(f)) for f in _ENRICH_FIELDS)
+
+        # --- Pre-step: fill date_taken from sidecars + filename patterns ---
+        # This is cheap (no file reading) so we run it before the scanner phase.
+        # Records that gain a date here are upserted immediately; if they still
+        # need other fields they continue into the scanner phase as normal.
+        _date_candidates = [r for r in existing if _missing_value(r.get('date_taken'))]
+        if _date_candidates:
+            from src.date_enricher import enrich_dates as _enrich_dates
+            _date_enriched, _date_stats = _enrich_dates(_date_candidates)
+            if _date_enriched:
+                # Patch existing list in-place so by_path picks up the new dates
+                _enriched_by_path = {str(r.get('full_path') or ''): r for r in _date_enriched}
+                for i, r in enumerate(existing):
+                    fp = str(r.get('full_path') or '')
+                    if fp in _enriched_by_path:
+                        existing[i] = _enriched_by_path[fp]
+                MetadataStore(config.to_dict()).upsert_records(_date_enriched)
+                print('  Date pre-fill: {:d} from sidecar, {:d} from filename, {:d} still undated'.format(
+                    _date_stats['sidecar'], _date_stats['filename'], _date_stats['still_missing']))
+            else:
+                print('  Date pre-fill: no additional dates found via sidecar or filename')
 
         by_path = {}
         files = []

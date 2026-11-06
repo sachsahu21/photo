@@ -25,6 +25,11 @@ try:
     from PIL import Image as PILImage
     from PIL.ExifTags import TAGS
     PIL_OK = True
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
 except ImportError:
     PIL_OK = False
 
@@ -39,6 +44,23 @@ try:
     NP_OK = True
 except ImportError:
     NP_OK = False
+
+
+def _is_retryable_failure(rec):
+    """True when a record failed in a way worth retrying on the next scan.
+
+    Retry only *hard* failures where the file could not be read at all
+    (locked, transient I/O error, vanished) — these surface as an 'error'
+    with no md5_hash, because calculate_file_hashes returns '' when the read
+    fails. A record that DID get an md5 was read successfully; if it still
+    carries an error it is a permanent decode limitation (e.g. a RAW file with
+    no rawpy backend, an unsupported codec) that will fail identically every
+    scan. Those are recorded as-is and checkpointed, so we don't re-hash large
+    files forever with no chance of progress.
+    """
+    if not rec.get('error'):
+        return False
+    return not str(rec.get('md5_hash') or '').strip()
 
 
 def _ts(value):
@@ -267,7 +289,9 @@ class ImageScanner:
 
             def _parallel_cb(rec):
                 fp = rec.get('full_path') or rec.get('file_path')
-                if checkpoint and fp:
+                # Mark everything except hard read failures, matching the global
+                # checkpoint below — only unreadable files stay eligible for retry.
+                if checkpoint and fp and not _is_retryable_failure(rec):
                     with _lock:
                         checkpoint.mark_processed(str(fp))
                 if batch_callback is not None:
@@ -277,10 +301,17 @@ class ImageScanner:
             records = self._scan_parallel_with_callback(files, _parallel_cb)
         else:
             records = self._scan_sequential(files, checkpoint, batch_callback=batch_callback)
-        # After scanning, update global checkpoint with newly processed files
+        # After scanning, update global checkpoint with newly processed files.
+        # Hard read failures (unreadable/locked/vanished — no md5) are excluded so
+        # they are retried next scan; permanent decode limits (e.g. RAW without a
+        # backend) are recorded and checkpointed so they aren't re-hashed forever.
         if global_cp_path:
             new_processed = set()
+            error_count = 0
             for rec in records:
+                if _is_retryable_failure(rec):
+                    error_count += 1
+                    continue
                 fp = rec.get('full_path') or rec.get('file_path')
                 if fp:
                     new_processed.add(str(Path(fp)))
@@ -288,6 +319,9 @@ class ImageScanner:
             # Save updated global checkpoint
             from .global_checkpoint import save_global_checkpoint
             save_global_checkpoint(global_cp_path, list(processed_set), len(processed_set)-1)
+            if error_count:
+                logger.warning('%d file(s) errored during scan; they will be retried on the next scan', error_count)
+                print('  Note: ' + str(error_count) + ' file(s) errored and will be retried on the next scan')
 
         if self.geo_enabled and self._geocoder:
             self._batch_geocode(records)
@@ -341,6 +375,8 @@ class ImageScanner:
         for fp in it:
             try:
                 rec = self._finalize_record(self._extract(fp, fields_needed=fields_needed))
+                if rec.get('error'):
+                    logger.error('Scan error %s: %s', fp, rec['error'])
                 records.append(rec)
                 if checkpoint:
                     checkpoint.mark_processed(str(fp))
