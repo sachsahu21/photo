@@ -1,6 +1,8 @@
 """Image Organizer v4.1 - flat / year / year-month-date with converter and merge."""
 
 import re
+import os
+import stat
 import json
 import shutil
 import logging
@@ -102,13 +104,16 @@ def _extract_date_key(folder_name):
 
 
 def _extract_text_suffix(folder_name):
-    m = RE_PIC.match(folder_name)
-    if m:
-        suffix = m.group(3)
-        if suffix:
-            suffix = suffix.strip('-')
-            if suffix:
-                return suffix
+    """Return the label between the date prefix and the count, for EITHER layout
+    (date-count-text or date-text-count). '' when there is no label.
+
+    Works by stripping the count and subtracting the leading date key, so it is
+    agnostic to where the -NNNpic token sits.
+    """
+    base = _strip_count(folder_name)
+    dk = _extract_date_key(base)
+    if dk and base.startswith(dk):
+        return base[len(dk):].strip('-_ ')
     return ''
 
 
@@ -123,29 +128,13 @@ def _should_skip_merge_for_suffix_conflict(group_folders):
 
 
 def _normalize_unaligned_folder_name(folder_path):
+    """Add or refresh the pic count on an unaligned folder: "2024-SG" ->
+    "2024-SG-050pic", "WhatsApp Images" -> "WhatsApp Images-050pic". Empty
+    untagged folders are left alone by _compose_count_name."""
     folder_path = Path(folder_path)
     if not folder_path.exists() or not folder_path.is_dir():
         return None
-    old_name = folder_path.name
-    actual_count = _count_files(folder_path)
-    if actual_count < 0:
-        return None
-    m = RE_PIC.match(old_name)
-    if not m:
-        # Only rename folders that already have the Npic pattern (day-level folders).
-        # year-text folders like "2024-SG" are user-named — leave them alone.
-        return None
-    new_name = m.group(1) + '-' + format_pic_count(actual_count) + m.group(3)
-    if not new_name or new_name == old_name:
-        return None
-    new_path = folder_path.parent / new_name
-    if new_path.exists() and str(new_path) != str(folder_path):
-        return None
-    try:
-        folder_path.rename(new_path)
-        return str(new_path)
-    except Exception:
-        return None
+    return _update_pic_count(folder_path, _count_files(folder_path))
 
 
 class ImageOrganizer:
@@ -231,7 +220,7 @@ class ImageOrganizer:
         if loc:
             cl = RE_LOC.sub('-', loc.lower()).strip('-')
             if cl and len(cl) > 1:
-                return dk + '-' + pp + '-' + cl
+                return dk + '-' + cl + '-' + pp
         return dk + '-' + pp
 
     def _get_loc(self, recs):
@@ -307,7 +296,7 @@ class ImageOrganizer:
         old_count = int(m.group(2))
         if old_count == new_total:
             return old_name, str(old_path)
-        new_name = m.group(1) + '-' + format_pic_count(new_total) + m.group(3)
+        new_name = _strip_count(old_name) + '-' + format_pic_count(new_total)
         new_path = old_path.parent / new_name
         if new_path.exists() and str(new_path) != str(old_path):
             return old_name, str(old_path)
@@ -348,6 +337,7 @@ class ImageOrganizer:
         if normal:
             mv.extend(self._org_normal(normal))
         self._fix_counts(mv)
+        _cleanup_empty_dirs(self.output)   # D2: remove truly-empty folders in the library
         self._report(mv)
         return mv
 
@@ -470,7 +460,7 @@ class ImageOrganizer:
             old_count = int(m.group(2))
             if old_count == actual:
                 continue
-            nn = m.group(1) + '-' + format_pic_count(actual) + m.group(3)
+            nn = _strip_count(old) + '-' + format_pic_count(actual)
             np2 = fp.parent / nn
             if (np2.exists() and str(np2) != str(fp)) or nn == old:
                 continue
@@ -684,10 +674,12 @@ class ImageOrganizer:
             return False
         print('  Scanning for same-date folders...')
         merge_count = _merge_same_date_folders(source, structure)
+        _cleanup_empty_dirs(source)   # D2: remove truly-empty folders left behind
         if merge_count > 0:
             print('  Merged: ' + str(merge_count) + ' folder groups')
         else:
             print('  No duplicate-date folders found')
+        print('  Removed empty folders.')
         return True
 
     @staticmethod
@@ -695,34 +687,95 @@ class ImageOrganizer:
         return detect_structure(root_folder)
 
     @staticmethod
-    def update_all_pic_counts(source_folder):
+    def plan_pic_counts(source_folder):
+        """Return the operations update_all_pic_counts would perform — no disk
+        changes. Each op is (kind, [source_paths], target_name):
+          'rename' — one folder renamed to target_name
+          'merge'  — folders sharing one identity (date-label) combined into one
+          'delete' — a truly-empty folder removed
+
+        Folders that reduce to the same identity (e.g. a legacy date-pic-text and
+        its date-text-pic twin) are MERGED and recounted rather than one silently
+        clobbering the other. Collisions with an uncollected folder of the same
+        name are reported, not clobbered."""
         source = Path(source_folder)
         if not source.exists():
             print('  Error: Source not found: ' + str(source))
-            return False
+            return []
         print('  Scanning all folders...')
         folders = _collect_all_folders(source)
         if not folders:
             print('  No folders found to check!')
-            return False
-        
-        renamed = 0
-        from tqdm import tqdm
-        for fd in tqdm(folders, desc='  Updating counts', disable=False):
-            old_path = Path(fd['path'])
-            if fd.get('current') == 'unaligned':
-                updated_path = _normalize_unaligned_folder_name(old_path)
-                if updated_path:
-                    renamed += 1
+            return []
+        # Bucket non-empty folders by identity (date-label); empties are deletions.
+        by_identity = defaultdict(list)
+        for fd in folders:
+            p = Path(fd['path'])
+            try:
+                if not any(p.iterdir()):
+                    continue
+            except Exception:
                 continue
+            ident = _strip_count(p.name)
+            if ident:
+                by_identity[ident].append(p)
+        ops = []
+        collisions = []
+        for ident, srcs in sorted(by_identity.items()):
+            if len(srcs) == 1:
+                p = srcs[0]
+                new_name = _compose_count_name(p.name, _count_files(p))
+                if not new_name:
+                    continue
+                dest = p.parent / new_name
+                if dest.exists() and not _is_empty_dir(dest):   # real collision, not a doomed empty twin
+                    collisions.append((p, new_name))
+                    continue
+                ops.append(('rename', [p], new_name))
+            else:                                    # #1: same identity -> merge + recount
+                total = sum(_count_files(p) for p in srcs)
+                ops.append(('merge', sorted(srcs), ident + '-' + format_pic_count(total)))
+        # #2: list exactly what the apply-time cleanup will delete (cascade-aware).
+        for d in sorted(_find_empty_dirs(source), reverse=True):
+            ops.append(('delete', [d], ''))
+        if collisions:
+            print('  ' + str(len(collisions)) + ' folder(s) SKIPPED - target already exists, resolve manually:')
+            for p, new_name in collisions[:20]:
+                print('    ' + p.name + '  ->  ' + new_name + '   [EXISTS]')
+            if len(collisions) > 20:
+                print('    ... and ' + str(len(collisions) - 20) + ' more')
+        return ops
 
-            new_total = _count_files(old_path)
-            updated_name = _update_pic_count(old_path, new_total)
-            if updated_name:
-                renamed += 1
-                
-        print('  Updated: ' + str(renamed) + ' folders')
-        return True
+    @staticmethod
+    def update_all_pic_counts(source_folder, dry_run=False, planned=None):
+        if planned is None:
+            planned = ImageOrganizer.plan_pic_counts(source_folder)
+        if dry_run:
+            return planned
+        renamed = merged = 0
+        for kind, srcs, target in tqdm(planned, desc='  Updating counts', disable=False):
+            try:
+                if kind == 'rename':
+                    dest = srcs[0].parent / target
+                    if dest != srcs[0] and _is_empty_dir(dest):
+                        _force_remove(dest)   # empty twin is holding the target name
+                    srcs[0].rename(dest)
+                    renamed += 1
+                elif kind == 'merge':
+                    survivor = max(srcs, key=_count_files)   # fewest file moves
+                    for other in srcs:
+                        if other != survivor:
+                            _merge_folders(other, survivor)
+                    final = _compose_count_name(survivor.name, _count_files(survivor))
+                    if final:
+                        survivor.rename(survivor.parent / final)
+                    merged += 1
+                # 'delete' ops are realised by the cleanup sweep below
+            except Exception:
+                pass
+        _cleanup_empty_dirs(Path(source_folder))   # D2: remove truly-empty folders
+        print('  Updated: ' + str(renamed) + ' renamed, ' + str(merged) + ' merged; removed empty folders.')
+        return renamed + merged
 
 
 def _merge_same_date_folders(root, structure):
@@ -770,6 +823,10 @@ def _merge_same_date_in_dir(parent_dir):
         if len(group_folders) < 2:
             continue
         if _should_skip_merge_for_suffix_conflict(group_folders):
+            # Same date but different labels (e.g. IN vs DG): do NOT merge, but
+            # still refresh each folder's count in B-form so the group is tidy.
+            for folder in group_folders:
+                _update_pic_count(folder, _count_files(folder))
             continue
         best_text = ''
         best_count = 0
@@ -796,7 +853,7 @@ def _merge_same_date_in_dir(parent_dir):
             except Exception:
                 pass
         total = _count_files(best_folder)
-        new_name = dk + '-' + format_pic_count(total) + (('-' + best_text) if best_text else '')
+        new_name = dk + (('-' + best_text) if best_text else '') + '-' + format_pic_count(total)
         if new_name != best_folder.name:
             new_path = best_folder.parent / new_name
             if not (new_path.exists() and str(new_path) != str(best_folder)):
@@ -810,6 +867,15 @@ def _merge_same_date_in_dir(parent_dir):
 
 def _build_target_path(dest, target_structure, fd):
     folder_name = fd['name']
+    # D1=A: normalise every folder to full-date B-form (date-text-count) on convert,
+    # cleaning separators and repositioning the count. Keeps full yyyy-mm-dd leaf
+    # names in all structures so date detection elsewhere keeps working.
+    try:
+        norm = _compose_count_name(folder_name, _count_files(Path(fd['path'])))
+        if norm:
+            folder_name = norm
+    except Exception:
+        pass
     year = fd.get('year', '')
     month = fd.get('month', '')
     if target_structure == 'flat':
@@ -826,20 +892,56 @@ def _build_target_path(dest, target_structure, fd):
     return dest / folder_name
 
 
+# A -NNNpic count token, only when it sits at a boundary (end or separator) so a
+# label like "top5pics" is never mistaken for a count.
+_COUNT_TOKEN = re.compile(r'-\d+pic(?=$|[-_ ])')
+
+
+def _norm_seps(name):
+    """Collapse ' - ' / spaces around hyphens to a single '-', keeping real label
+    spaces ('Goa Trip' stays 'Goa Trip')."""
+    return re.sub(r'\s*-\s*', '-', name)
+
+
+def _strip_count(name):
+    """Return name with ALL -NNNpic tokens removed, spaced separators normalised,
+    and trailing separators tidied.
+
+    Separators are normalised FIRST so a spaced count ('- 003pic') becomes
+    '-003pic' and is then recognised and stripped. Stripping every token also
+    self-heals malformed legacy double-counts.
+    """
+    base = _COUNT_TOKEN.sub('', _norm_seps(name))
+    return base.strip().rstrip('-_ ')
+
+
+def _compose_count_name(old_name, count):
+    """Return old_name with the pic count as a trailing badge, or None if unchanged.
+
+    Layout is always <identity>-<NNNpic>: any existing -NNNpic token is stripped
+    (wherever it sits) and a fresh one is appended at the end. A stale A-form
+    name therefore migrates automatically — 2023-05-14-042pic-SG becomes
+    2023-05-14-SG-042pic. An empty folder that never had a count is left
+    untouched (avoids xxx-000pic).
+    """
+    had_tag = bool(_COUNT_TOKEN.search(_norm_seps(old_name)))
+    base = _strip_count(old_name)
+    if not base:
+        return None
+    if count == 0 and not had_tag:
+        return None
+    new_name = base + '-' + format_pic_count(count)
+    return new_name if new_name != old_name else None
+
+
 def _update_pic_count(folder_path, new_count):
     folder_path = Path(folder_path)
     old_name = folder_path.name
-    m = RE_PIC.match(old_name)
-    if not m:
+    new_name = _compose_count_name(old_name, new_count)
+    if not new_name:
         return None
-    old_count = int(m.group(2))
-    if old_count == new_count:
-        return None
-    new_name = m.group(1) + '-' + format_pic_count(new_count) + m.group(3)
     new_path = folder_path.parent / new_name
     if new_path.exists() and str(new_path) != str(folder_path):
-        return None
-    if new_name == old_name:
         return None
     try:
         folder_path.rename(new_path)
@@ -954,12 +1056,52 @@ def _files_identical(a: Path, b: Path) -> bool:
         return False
 
 
+def _is_empty_dir(path):
+    """True if path is a directory containing no items."""
+    path = Path(path)
+    try:
+        return path.is_dir() and not any(path.iterdir())
+    except Exception:
+        return False
+
+
+def _force_remove(path):
+    """Delete a file or empty dir, clearing the read-only attribute and retrying
+    if the first attempt is denied. OneDrive cloud placeholders and copied items
+    carry read-only on Windows, so unlink/rmdir raises WinError 5 (Access denied);
+    a sharing violation (WinError 32 - item open elsewhere) is left alone, since
+    chmod can't fix a lock and would needlessly strip the attribute. Returns True
+    if the item was removed, False otherwise."""
+    path = Path(path)
+
+    def _rm():
+        if path.is_dir():
+            path.rmdir()
+        else:
+            path.unlink()
+
+    try:
+        _rm()
+        return True
+    except OSError as e:
+        if getattr(e, 'winerror', None) not in (5, None):   # not read-only (e.g. 32 lock)
+            return False
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            _rm()
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def _move_file_no_overwrite(src: Path, dest_dir: Path):
     """Move src into dest_dir. Skip if identical file already exists; rename with counter otherwise."""
     target = dest_dir / src.name
     if target.exists():
         if _files_identical(src, target):
-            src.unlink()
+            _force_remove(src)   # read-only-safe (OneDrive placeholders)
             return
         stem, suffix = src.stem, src.suffix
         for i in range(1, 100000):
@@ -980,34 +1122,47 @@ def _merge_folders(old_path, new_path):
             if target_item.exists():
                 for sub in item.iterdir():
                     _move_file_no_overwrite(sub, target_item)
-                try:
-                    if not any(item.iterdir()):
-                        item.rmdir()
-                except Exception:
-                    pass
+                if _is_empty_dir(item):
+                    _force_remove(item)
             else:
                 shutil.move(str(item), str(target_item))
         else:
             _move_file_no_overwrite(item, new_path)
+    if _is_empty_dir(old_path):
+        _force_remove(old_path)
+
+
+def _find_empty_dirs(folder):
+    """Return the set of dirs that should be removed, cascade-aware: a parent that
+    becomes empty once its (also-removed) empty children are gone is included.
+
+    Single source of truth for emptiness — the dry-run preview and the actual
+    deletion in _cleanup_empty_dirs both read from this, so they can never drift."""
+    folder = Path(folder)
+    will_delete = set()
     try:
-        if old_path.exists() and not any(old_path.iterdir()):
-            old_path.rmdir()
+        for d in sorted(folder.rglob('*'), reverse=True):
+            if not d.is_dir():
+                continue
+            try:
+                kids = list(d.iterdir())
+            except Exception:
+                continue
+            if all(k in will_delete for k in kids):   # no files, every subdir doomed
+                will_delete.add(d)
     except Exception:
         pass
+    return will_delete
 
 
 def _cleanup_empty_dirs(folder):
-    folder = Path(folder)
-    try:
-        for item in sorted(folder.rglob('*'), reverse=True):
-            if item.is_dir():
-                try:
-                    if not any(item.iterdir()):
-                        item.rmdir()
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    """Remove exactly the dirs _find_empty_dirs identifies, bottom-up (children
+    before parents) so cascades succeed. Removal goes through _force_remove so it
+    is read-only-aware: OneDrive cloud placeholders and copied folders carry
+    read-only, which otherwise makes rmdir fail with WinError 5 and silently
+    leaves empty folders behind."""
+    for d in sorted(_find_empty_dirs(folder), reverse=True):
+        _force_remove(d)
 
 
 def detect_structure(root_folder):

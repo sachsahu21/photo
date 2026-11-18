@@ -1392,10 +1392,36 @@ def task_update_counts(config, logger):
     if not Path(source).exists():
         print('  Error: Folder not found!')
         return
-    if input('  Confirm? (yes/no): ').strip().lower() != 'yes':
+    # Dry-run first: show every rename/merge/delete before touching disk.
+    planned = ImageOrganizer.update_all_pic_counts(source, dry_run=True)
+    if not planned:
+        print('  Nothing to do - all counts correct, no empty folders.')
+        return
+    changes = [o for o in planned if o[0] in ('rename', 'merge')]
+    deletes = [o for o in planned if o[0] == 'delete']
+
+    def _show(items, render, cap=20):
+        for it in items[:cap]:
+            print(render(it))
+        if len(items) > cap:
+            print('    ... and ' + str(len(items) - cap) + ' more')
+
+    def _fmt_change(o):
+        _, srcs, target = o
+        if o[0] == 'merge':
+            return '    MERGE: ' + ' + '.join(p.name for p in srcs) + '  ->  ' + target + '   (max; duplicates dropped on merge)'
+        return '    ' + srcs[0].name + '  ->  ' + target
+
+    if changes:
+        print('\n  ' + str(len(changes)) + ' rename/merge:')
+        _show(changes, _fmt_change)
+    if deletes:
+        print('\n  ' + str(len(deletes)) + ' empty folder(s) would be DELETED:')
+        _show(deletes, lambda o: '    [DEL] ' + o[1][0].name)
+    if input('  Apply? (yes/no): ').strip().lower() != 'yes':
         print('  Cancelled')
         return
-    ImageOrganizer.update_all_pic_counts(source)
+    ImageOrganizer.update_all_pic_counts(source, planned=planned)
 
 
 def _vault_line(config) -> str:

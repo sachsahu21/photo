@@ -51,7 +51,8 @@ scan:
       - vob
 
 organization:
-  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\sachin_organized"
+  output_folder: "C:\\Users\\ISSUser\\Desktop\\Sachin\\hdd\\organized"
+  # output_folder: "C:\\Users\\ISSUser\\OneDrive\\Camera\\Family-International"
   # flat | year | year-month-date
   folder_structure: "year"
   # copy = keep originals; move = relocate into organized tree
